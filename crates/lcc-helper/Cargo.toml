@@ -1,0 +1,11 @@
+[package]
+name = "lcc-helper"
+description = "Privileged helper for Linux Crap Cleaner, run through pkexec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lcc-core.workspace = true
+rustix = { version = "1", features = ["process"] }

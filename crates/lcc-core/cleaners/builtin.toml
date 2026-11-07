@@ -1,0 +1,355 @@
+# Built-in cleaners for the Junk Cleaner.
+#
+# Each [[cleaner]] describes one thing that can be cleaned. Fields:
+#
+#   id           unique name, used to remember choices
+#   name         shown in the list
+#   category     browsers | apps | developer | system | trash-history
+#   description  one sentence, shown under the name
+#   icon         symbolic icon name (optional)
+#   default      checked when first shown (only for things that are safe to lose)
+#   running      process names; while one runs, the cleaner is skipped
+#   paths        what to delete; matching files and folders are removed
+#   kind         paths (default) | package-cache | journal
+#   needs_root   true if only the administrator can delete these
+#   exclude_known  skip folders that another cleaner already handles
+#
+# Path placeholders: {home} {cache} {config} {data} {state}, following the
+# XDG base directory variables. `*` matches any part of one name (including
+# names starting with a dot); `?` matches one character. Folders themselves
+# such as ~/.cache are never deleted, only what's inside.
+
+# ── Browsers ────────────────────────────────────────────────────────────────
+
+[[cleaner]]
+id = "firefox-cache"
+name = "Firefox"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["firefox", "firefox-bin"]
+paths = [
+    "{cache}/mozilla/firefox/*/cache2",
+    "{cache}/mozilla/firefox/*/startupCache",
+    "{cache}/mozilla/firefox/*/thumbnails",
+]
+
+[[cleaner]]
+id = "zen-cache"
+name = "Zen Browser"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["zen", "zen-bin"]
+paths = [
+    "{cache}/zen/*/cache2",
+    "{cache}/zen/*/startupCache",
+    "{cache}/zen/*/thumbnails",
+]
+
+[[cleaner]]
+id = "librewolf-cache"
+name = "LibreWolf"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["librewolf", "librewolf-bin"]
+paths = [
+    "{cache}/librewolf/*/cache2",
+    "{cache}/librewolf/*/startupCache",
+]
+
+[[cleaner]]
+id = "chromium-cache"
+name = "Chromium"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["chromium"]
+paths = ["{cache}/chromium/*/Cache", "{cache}/chromium/*/Code Cache"]
+
+[[cleaner]]
+id = "chrome-cache"
+name = "Google Chrome"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["chrome"]
+paths = [
+    "{cache}/google-chrome*/*/Cache",
+    "{cache}/google-chrome*/*/Code Cache",
+]
+
+[[cleaner]]
+id = "brave-cache"
+name = "Brave"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["brave", "brave-browser"]
+paths = ["{cache}/BraveSoftware/*/*/Cache", "{cache}/BraveSoftware/*/*/Code Cache"]
+
+[[cleaner]]
+id = "vivaldi-cache"
+name = "Vivaldi"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["vivaldi-bin"]
+paths = ["{cache}/vivaldi*/*/Cache", "{cache}/vivaldi*/*/Code Cache"]
+
+[[cleaner]]
+id = "edge-cache"
+name = "Microsoft Edge"
+category = "browsers"
+description = "Cached web pages and images. Passwords, cookies and history are kept."
+icon = "web-browser-symbolic"
+default = true
+running = ["msedge"]
+paths = ["{cache}/microsoft-edge*/*/Cache", "{cache}/microsoft-edge*/*/Code Cache"]
+
+# ── Apps ────────────────────────────────────────────────────────────────────
+
+[[cleaner]]
+id = "thumbnails"
+name = "Thumbnails"
+category = "apps"
+description = "Small previews of your pictures and videos. They're recreated when needed."
+icon = "image-x-generic-symbolic"
+default = true
+paths = ["{cache}/thumbnails/*"]
+
+[[cleaner]]
+id = "spotify-cache"
+name = "Spotify"
+category = "apps"
+description = "Songs and images Spotify saved to play faster."
+icon = "audio-x-generic-symbolic"
+default = true
+running = ["spotify"]
+paths = ["{cache}/spotify/*"]
+
+[[cleaner]]
+id = "discord-cache"
+name = "Discord"
+category = "apps"
+description = "Cached images and app code. Your login is kept."
+icon = "user-available-symbolic"
+default = true
+running = ["Discord", "discord", "vesktop"]
+paths = [
+    "{config}/discord/Cache",
+    "{config}/discord/Code Cache",
+    "{config}/discord/GPUCache",
+    "{config}/vesktop/sessionData/Cache",
+    "{config}/vesktop/sessionData/Code Cache",
+]
+
+[[cleaner]]
+id = "vscode-cache"
+name = "Visual Studio Code"
+category = "apps"
+description = "Cached data and old logs. Your settings and extensions are kept."
+icon = "text-editor-symbolic"
+default = true
+running = ["code", "code-oss", "codium"]
+paths = [
+    "{config}/Code/Cache",
+    "{config}/Code/CachedData",
+    "{config}/Code/CachedExtensionVSIXs",
+    "{config}/Code/Code Cache",
+    "{config}/Code/GPUCache",
+    "{config}/Code/logs",
+    "{config}/Code - OSS/Cache",
+    "{config}/Code - OSS/CachedData",
+    "{config}/Code - OSS/Code Cache",
+    "{config}/Code - OSS/logs",
+    "{config}/VSCodium/Cache",
+    "{config}/VSCodium/CachedData",
+    "{config}/VSCodium/Code Cache",
+    "{config}/VSCodium/logs",
+]
+
+[[cleaner]]
+id = "flatpak-app-caches"
+name = "Flatpak app caches"
+category = "apps"
+description = "Temporary files of apps installed from Flathub."
+icon = "package-x-generic-symbolic"
+default = true
+paths = ["{home}/.var/app/*/cache/*"]
+
+[[cleaner]]
+id = "other-app-caches"
+name = "Other app caches"
+category = "apps"
+description = "Everything else in your cache folder. Some apps may start a little slower the next time."
+icon = "folder-symbolic"
+default = false
+exclude_known = true
+paths = ["{cache}/*"]
+
+# ── Developer tools ─────────────────────────────────────────────────────────
+
+[[cleaner]]
+id = "cargo-cache"
+name = "Rust (cargo)"
+category = "developer"
+description = "Downloaded crates. They're downloaded again when a project needs them."
+icon = "applications-engineering-symbolic"
+running = ["cargo", "rustc"]
+paths = ["{home}/.cargo/registry/cache/*", "{home}/.cargo/registry/src/*"]
+
+[[cleaner]]
+id = "npm-cache"
+name = "Node.js (npm)"
+category = "developer"
+description = "Downloaded packages. They're downloaded again when a project needs them."
+icon = "applications-engineering-symbolic"
+running = ["npm"]
+paths = ["{home}/.npm/_cacache"]
+
+[[cleaner]]
+id = "yarn-cache"
+name = "Yarn"
+category = "developer"
+description = "Downloaded packages. They're downloaded again when a project needs them."
+icon = "applications-engineering-symbolic"
+running = ["yarn"]
+paths = ["{cache}/yarn/*"]
+
+[[cleaner]]
+id = "bun-cache"
+name = "Bun"
+category = "developer"
+description = "Downloaded packages. They're downloaded again when a project needs them."
+icon = "applications-engineering-symbolic"
+running = ["bun"]
+paths = ["{home}/.bun/install/cache/*"]
+
+[[cleaner]]
+id = "pip-cache"
+name = "Python (pip)"
+category = "developer"
+description = "Downloaded packages. They're downloaded again when needed."
+icon = "applications-engineering-symbolic"
+running = ["pip", "pip3"]
+paths = ["{cache}/pip/*"]
+
+[[cleaner]]
+id = "uv-cache"
+name = "Python (uv)"
+category = "developer"
+description = "Downloaded packages. They're downloaded again when needed."
+icon = "applications-engineering-symbolic"
+running = ["uv"]
+paths = ["{cache}/uv/*"]
+
+[[cleaner]]
+id = "go-cache"
+name = "Go"
+category = "developer"
+description = "Build cache. Projects take longer to build the first time afterwards."
+icon = "applications-engineering-symbolic"
+running = ["go"]
+paths = ["{cache}/go-build/*"]
+
+[[cleaner]]
+id = "gradle-cache"
+name = "Gradle"
+category = "developer"
+description = "Downloaded libraries and build cache."
+icon = "applications-engineering-symbolic"
+paths = ["{home}/.gradle/caches/*"]
+
+[[cleaner]]
+id = "aur-build-files"
+name = "AUR build files"
+category = "developer"
+description = "Source code and packages left after installing from the AUR with paru or yay."
+icon = "package-x-generic-symbolic"
+default = true
+running = ["paru", "yay", "makepkg"]
+paths = ["{cache}/paru/clone/*", "{cache}/yay/*"]
+
+# ── System ──────────────────────────────────────────────────────────────────
+
+[[cleaner]]
+id = "shader-caches"
+name = "Graphics shader caches"
+category = "system"
+description = "Compiled graphics code. Games may stutter briefly while it's rebuilt."
+icon = "video-display-symbolic"
+paths = [
+    "{cache}/mesa_shader_cache/*",
+    "{cache}/mesa_shader_cache_db/*",
+    "{cache}/nvidia/GLCache/*",
+    "{cache}/radv_builtin_shaders*",
+    "{cache}/qtshadercache*",
+]
+
+[[cleaner]]
+id = "package-cache"
+name = "Old package versions"
+category = "system"
+description = "Installers of past updates kept by the package manager."
+icon = "package-x-generic-symbolic"
+default = true
+kind = "package-cache"
+needs_root = true
+
+[[cleaner]]
+id = "journal"
+name = "System logs"
+category = "system"
+description = "Logs from the system and apps (systemd journal)."
+icon = "text-x-generic-symbolic"
+kind = "journal"
+needs_root = true
+
+[[cleaner]]
+id = "coredumps"
+name = "Crash reports"
+category = "system"
+description = "Memory snapshots saved when programs crashed."
+icon = "dialog-warning-symbolic"
+needs_root = true
+paths = ["/var/lib/systemd/coredump/*", "/var/crash/*"]
+
+[[cleaner]]
+id = "old-logs"
+name = "Old log files"
+category = "system"
+description = "Rotated and compressed logs in /var/log."
+icon = "text-x-generic-symbolic"
+needs_root = true
+paths = ["/var/log/*.old", "/var/log/*.[0-9]", "/var/log/*.gz", "/var/log/*/*.gz"]
+
+# ── Trash & history ─────────────────────────────────────────────────────────
+
+[[cleaner]]
+id = "trash"
+name = "Empty the Trash"
+category = "trash-history"
+description = "Files you deleted. They can't be restored afterwards."
+icon = "user-trash-symbolic"
+paths = [
+    "{data}/Trash/files/*",
+    "{data}/Trash/info/*",
+    "{data}/Trash/expunged/*",
+]
+
+[[cleaner]]
+id = "recent-files"
+name = "Recently used files list"
+category = "trash-history"
+description = "The list of files you opened recently, shown in file pickers and apps."
+icon = "document-open-recent-symbolic"
+paths = ["{data}/recently-used.xbel"]

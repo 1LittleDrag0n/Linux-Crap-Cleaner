@@ -1,0 +1,18 @@
+[package]
+name = "lcc-core"
+description = "Scanning and cleaning logic for Linux Crap Cleaner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dirs = "7"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "1"
+tracing = "0.1"
+rayon = "1.12"
+blake3 = "1.8"
+rustix = { version = "1", features = ["fs", "process"] }
+trash = { version = "5.3", default-features = false, features = ["freedesktop"] }

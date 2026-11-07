@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Linux Crap Cleaner
+GenericName=System Cleaner
+Comment=Find what's filling your disk and clean it safely
+Exec=linux-crap-cleaner
+Icon=io.github.LinuxCrapCleaner
+Terminal=false
+Categories=GTK;System;Utility;
+Keywords=clean;cleaner;disk;storage;space;junk;cache;duplicates;uninstall;
+StartupNotify=true

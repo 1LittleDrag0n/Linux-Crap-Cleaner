@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets Linux Crap Cleaner run its administrator helper through pkexec.
+  Install to /usr/share/polkit-1/actions/ together with the helper at
+  /usr/lib/linux-crap-cleaner/lcc-helper. "auth_admin_keep" remembers the
+  password for a few minutes, so one cleanup asks only once.
+-->
+<policyconfig>
+  <vendor>Linux Crap Cleaner</vendor>
+  <action id="io.github.LinuxCrapCleaner.helper">
+    <description>Clean up system files</description>
+    <message>Authentication is required to clean up system files, such as old packages and logs</message>
+    <icon_name>user-trash</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/linux-crap-cleaner/lcc-helper</annotate>
+  </action>
+</policyconfig>
