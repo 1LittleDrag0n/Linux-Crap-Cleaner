@@ -46,7 +46,9 @@ mkdir -p "$TOOLS"
 fetch() {
     local name="$1" url="$2"
     if [[ ! -x "$TOOLS/$name" ]]; then
-        curl -fL --retry 3 -o "$TOOLS/$name.part" "$url"
+        # GitHub's download servers sometimes answer 504 for a minute or two.
+        curl -fL --retry 8 --retry-delay 15 --retry-all-errors \
+            -o "$TOOLS/$name.part" "$url"
         mv "$TOOLS/$name.part" "$TOOLS/$name"
         chmod +x "$TOOLS/$name"
     fi
