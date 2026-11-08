@@ -87,6 +87,7 @@ impl SimpleComponent for App {
     ) -> ComponentParts<Self> {
         let settings = Settings::load();
         apply_theme(settings.theme);
+        add_icon_paths(&window);
         let system = SystemInfo::detect();
 
         let dashboard = Dashboard::builder()
@@ -353,6 +354,27 @@ fn sidebar_row(page: Page) -> gtk::ListBoxRow {
             .build(),
     );
     gtk::ListBoxRow::builder().child(&row_box).build()
+}
+
+/// Lets the app find its own icon when it isn't installed system-wide:
+/// inside an AppImage (`usr/share/icons` next to `usr/bin`) and in a
+/// development build (the repository's `data/icons`).
+fn add_icon_paths(window: &adw::ApplicationWindow) {
+    let theme = gtk::IconTheme::for_display(&gtk::prelude::WidgetExt::display(window));
+    let mut paths = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../data/icons"
+    ))];
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.to_path_buf()))
+    {
+        paths.push(dir.join("../share/icons"));
+    }
+    for p in paths.into_iter().filter(|p| p.is_dir()) {
+        theme.add_search_path(p);
+    }
+    gtk::Window::set_default_icon_name(APP_ID);
 }
 
 fn apply_theme(theme: Theme) {

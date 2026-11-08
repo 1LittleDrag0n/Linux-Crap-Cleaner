@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::junk::Places;
 use crate::leftovers::normalize;
+use crate::native::Backend;
 use crate::packages::{Package, Source};
 
 /// What the tracker knows about one program.
@@ -85,6 +86,8 @@ pub fn process_keys(environ: &[u8], exe: Option<&Path>, cmdline: &[u8]) -> Vec<S
     for var in environ.split(|&b| b == 0) {
         if let Some(id) = var.strip_prefix(b"FLATPAK_ID=") {
             keys.push(format!("flatpak:{}", String::from_utf8_lossy(id)));
+        } else if let Some(name) = var.strip_prefix(b"SNAP_NAME=") {
+            keys.push(format!("snap:{}", String::from_utf8_lossy(name)));
         } else if let Some(path) = var.strip_prefix(b"APPIMAGE=") {
             keys.push(format!("appimage:{}", String::from_utf8_lossy(path)));
         }
@@ -191,7 +194,12 @@ pub fn set_tracker_enabled(enabled: bool) -> Result<(), String> {
         }
     };
     if enabled {
-        let program = std::env::current_exe().map_err(|e| e.to_string())?;
+        // Inside an AppImage the running program lives in a temporary mount;
+        // the service must start the AppImage file itself.
+        let program = match std::env::var_os("APPIMAGE").map(PathBuf::from) {
+            Some(appimage) if appimage.is_file() => appimage,
+            _ => std::env::current_exe().map_err(|e| e.to_string())?,
+        };
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -315,38 +323,6 @@ fn newest_change(dir: &Path) -> Option<i64> {
     )
 }
 
-/// Which installed package owns each of `paths` (absolute), from pacman's
-/// file lists.
-fn pacman_owners(paths: &HashSet<String>) -> HashMap<String, String> {
-    let db = Path::new(crate::packages::PACMAN_DB);
-    let Ok(read) = std::fs::read_dir(db) else {
-        return HashMap::new();
-    };
-    let mut owners = HashMap::new();
-    for e in read.flatten() {
-        let Ok(files) = std::fs::read_to_string(e.path().join("files")) else {
-            continue;
-        };
-        let mut owned = Vec::new();
-        for line in files.lines() {
-            let abs = format!("/{line}");
-            if paths.contains(&abs) {
-                owned.push(abs);
-            }
-        }
-        if owned.is_empty() {
-            continue;
-        }
-        let name = std::fs::read_to_string(e.path().join("desc"))
-            .map(|d| crate::packages::parse_pacman_desc(&d).name)
-            .unwrap_or_default();
-        for p in owned {
-            owners.insert(p, name.clone());
-        }
-    }
-    owners
-}
-
 /// Tracked usage per package id (`source:name`).
 fn tracked(db: &UsageDb, packages: &[Package]) -> HashMap<String, Seen> {
     let mut by_package: HashMap<String, Seen> = HashMap::new();
@@ -355,16 +331,19 @@ fn tracked(db: &UsageDb, packages: &[Package]) -> HashMap<String, Seen> {
         e.last = e.last.max(s.last);
         e.minutes = e.minutes.max(s.minutes);
     };
-    let files: HashSet<String> = db
+    let files: Vec<PathBuf> = db
         .seen
         .keys()
         .filter_map(|k| k.strip_prefix("exe:").or_else(|| k.strip_prefix("arg:")))
-        .map(str::to_owned)
+        .map(PathBuf::from)
         .collect();
-    let owners = pacman_owners(&files);
+    let backend = Backend::detect();
+    let owners = backend.map(|b| b.owners_of(&files)).unwrap_or_default();
     for (key, seen) in &db.seen {
         if let Some(id) = key.strip_prefix("flatpak:") {
             merge(format!("Flatpak:{id}"), seen);
+        } else if let Some(name) = key.strip_prefix("snap:") {
+            merge(format!("Snap:{name}"), seen);
         } else if let Some(path) = key.strip_prefix("appimage:") {
             if let Some(p) = packages
                 .iter()
@@ -375,9 +354,10 @@ fn tracked(db: &UsageDb, packages: &[Package]) -> HashMap<String, Seen> {
         } else if let Some(file) = key
             .strip_prefix("exe:")
             .or_else(|| key.strip_prefix("arg:"))
-            && let Some(owner) = owners.get(file)
+            && let Some(owner) = owners.get(Path::new(file))
+            && let Some(backend) = backend
         {
-            merge(format!("pacman:{owner}"), seen);
+            merge(format!("{}:{owner}", backend.name()), seen);
         }
     }
     by_package
@@ -456,7 +436,8 @@ mod tests {
 
     #[test]
     fn process_keys_cover_flatpak_appimage_and_scripts() {
-        let environ = b"HOME=/h\0FLATPAK_ID=org.gnome.Maps\0APPIMAGE=/h/Apps/x.AppImage\0";
+        let environ =
+            b"HOME=/h\0FLATPAK_ID=org.gnome.Maps\0APPIMAGE=/h/Apps/x.AppImage\0SNAP_NAME=spotify\0";
         let cmdline = b"/usr/lib/electron/electron\0/bin/sh\0--flag\0";
         let keys = process_keys(
             environ,
@@ -465,6 +446,7 @@ mod tests {
         );
         assert!(keys.contains(&"flatpak:org.gnome.Maps".to_owned()));
         assert!(keys.contains(&"appimage:/h/Apps/x.AppImage".to_owned()));
+        assert!(keys.contains(&"snap:spotify".to_owned()));
         assert!(keys.contains(&"exe:/usr/lib/electron/electron".to_owned()));
         assert!(keys.contains(&"arg:/bin/sh".to_owned()), "{keys:?}");
         assert!(!keys.iter().any(|k| k.contains("--flag")));
@@ -495,7 +477,11 @@ mod tests {
 
     #[test]
     fn names_for_matching_folders() {
-        let (strong, weak) = app_names(&app("zen-browser-bin", "Zen Browser", Source::Pacman));
+        let (strong, weak) = app_names(&app(
+            "zen-browser-bin",
+            "Zen Browser",
+            Source::Native(Backend::Pacman),
+        ));
         assert!(strong.contains("zenbrowser"));
         assert!(weak.contains("zen"));
         assert!(!weak.contains("browser") && !weak.contains("bin"));
@@ -516,8 +502,12 @@ mod tests {
             state: home.join(".local/state"),
         };
         let packages = vec![
-            app("xfce4-notes-plugin", "Notes", Source::Pacman),
-            app("xfce4-dict", "Dictionary", Source::Pacman),
+            app(
+                "xfce4-notes-plugin",
+                "Notes",
+                Source::Native(Backend::Pacman),
+            ),
+            app("xfce4-dict", "Dictionary", Source::Native(Backend::Pacman)),
         ];
         let usage = app_usage(packages, &UsageDb::default(), &places);
         fs::remove_dir_all(&home).unwrap();
@@ -540,9 +530,17 @@ mod tests {
         let mut db = UsageDb::default();
         db.record(&["flatpak:org.gnome.Maps".to_owned()].into(), 42, 3);
         let packages = vec![
-            app("zen-browser-bin", "Zen Browser", Source::Pacman),
-            app("spotify", "Spotify", Source::Pacman),
-            app("never-used-app", "Never Used", Source::Pacman),
+            app(
+                "zen-browser-bin",
+                "Zen Browser",
+                Source::Native(Backend::Pacman),
+            ),
+            app("spotify", "Spotify", Source::Native(Backend::Pacman)),
+            app(
+                "never-used-app",
+                "Never Used",
+                Source::Native(Backend::Pacman),
+            ),
             app("org.gnome.Maps", "Maps", Source::Flatpak),
         ];
         let usage = app_usage(packages, &db, &places);

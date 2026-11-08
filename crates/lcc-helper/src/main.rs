@@ -6,9 +6,10 @@
 //! The helper accepts only the named operations in
 //! [`lcc_core::privileged::Operation`], checked by
 //! [`lcc_core::privileged::parse_args`]; never a path or a command. Each
-//! operation re-checks its inputs as root, removes packages only through
-//! pacman, and prints one report line (`ok`/`error`, operation, bytes
-//! freed) that the GUI reads.
+//! operation re-checks its inputs as root, removes packages only through the
+//! system's package manager (pacman, APT, DNF, Zypper) or `snap`, and prints
+//! one report line (`ok`/`error`, operation, bytes freed) that the GUI
+//! reads.
 //!
 //! Exit codes: 0 all done, 1 an operation failed, 2 bad arguments, 3 not
 //! running as root.
@@ -19,12 +20,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use lcc_core::junk::{glob, measure, old_package_versions};
-use lcc_core::packages::{PACMAN_DB, pacman_orphans, read_pacman_db};
-use lcc_core::privileged::{
-    OpReport, Operation, delete_files_inside, parse_args, protected_package, running_kernel_package,
-};
+use lcc_core::native::{Backend, explain_error};
+use lcc_core::privileged::{OpReport, Operation, delete_files_inside, parse_args};
+use lcc_core::snap;
 
-const PACMAN: &str = "/usr/bin/pacman";
 const PACMAN_CACHE: &str = "/var/cache/pacman/pkg";
 const PACMAN_LOCK: &str = "/var/lib/pacman/db.lck";
 
@@ -39,7 +38,8 @@ fn main() -> ExitCode {
             eprintln!(
                 "usage: lcc-helper OPERATION [ARGS] [-- OPERATION [ARGS]]...\n\
                  operations: clean-package-cache KEEP | vacuum-journal DAYS |\n\
-                 remove-orphans PKG... | remove-packages PKG... | clean-coredumps | clean-old-logs"
+                 remove-orphans PKG... | remove-packages PKG... | clean-coredumps | clean-old-logs |\n\
+                 remove-snap-revisions NAME=REV... | remove-snaps NAME..."
             );
             return ExitCode::from(2);
         }
@@ -94,30 +94,68 @@ fn run(op: &Operation) -> Result<u64, String> {
             Ok(before.saturating_sub(measure(journal).0))
         }
         Operation::RemoveOrphans { packages } => {
-            let db = read_pacman_db(Path::new(PACMAN_DB));
-            let orphans: Vec<&str> = pacman_orphans(&db)
-                .iter()
-                .map(|e| e.name.as_str())
+            let backend = Backend::detect().ok_or("no supported package manager found")?;
+            let installed = backend.list();
+            let orphans: Vec<String> = backend
+                .orphans(&installed)
+                .into_iter()
+                .map(|p| p.name)
                 .collect();
-            if let Some(p) = packages.iter().find(|p| !orphans.contains(&p.as_str())) {
+            if let Some(p) = packages.iter().find(|p| !orphans.contains(p)) {
                 return Err(format!(
                     "{p} is no longer an orphan package; nothing was removed"
                 ));
             }
-            remove_packages(packages)
+            remove_packages(backend, packages, false)
         }
         Operation::RemovePackages { packages } => {
-            let kernel = running_kernel_package();
-            let db = read_pacman_db(Path::new(PACMAN_DB));
+            let backend = Backend::detect().ok_or("no supported package manager found")?;
+            let installed = backend.list();
             for p in packages {
-                if !db.iter().any(|e| &e.name == p) {
+                if !installed.iter().any(|e| &e.name == p) {
                     return Err(format!("{p} isn't installed"));
                 }
-                if let Some(why) = protected_package(p, kernel.as_deref()) {
-                    return Err(format!("{p} can't be removed: {why}"));
-                }
             }
-            remove_packages(packages)
+            remove_packages(backend, packages, true)
+        }
+        Operation::RemoveSnapRevisions { revisions } => {
+            let disabled = snap::disabled_revisions();
+            let mut freed = 0;
+            for (name, rev) in revisions {
+                let Some(entry) = disabled
+                    .iter()
+                    .find(|s| &s.name == name && s.revision == *rev)
+                else {
+                    return Err(format!(
+                        "{name} revision {rev} is not an old, disabled revision"
+                    ));
+                };
+                let size = entry.size();
+                command(
+                    "/usr/bin/snap",
+                    &["remove", &format!("--revision={rev}"), name],
+                )?;
+                freed += size;
+            }
+            Ok(freed)
+        }
+        Operation::RemoveSnaps { names } => {
+            let installed = snap::list_all();
+            let mut freed = 0;
+            for name in names {
+                if snap::PROTECTED_SNAPS.contains(&name.as_str()) {
+                    return Err(format!("{name} can't be removed: your system needs it"));
+                }
+                let revisions: Vec<&snap::SnapEntry> =
+                    installed.iter().filter(|s| &s.name == name).collect();
+                if revisions.is_empty() {
+                    return Err(format!("{name} isn't installed"));
+                }
+                let size: u64 = revisions.iter().map(|s| s.size()).sum();
+                command("/usr/bin/snap", &["remove", name])?;
+                freed += size;
+            }
+            Ok(freed)
         }
         Operation::CleanCoredumps => {
             let mut freed = 0;
@@ -198,21 +236,36 @@ fn clean_package_cache(keep: u32) -> Result<u64, String> {
     Err("no supported package cache found".to_owned())
 }
 
-/// Removes packages with `pacman -Rns`; returns the installed size that went
-/// away (including dependencies only they needed).
-fn remove_packages(packages: &[String]) -> Result<u64, String> {
-    if Path::new(PACMAN_LOCK).exists() {
+/// Removes packages (and the dependencies only they needed) with the system
+/// package manager; returns the installed size that went away.
+///
+/// Refuses if anything protected would be removed, including packages the
+/// removal would take along (APT removes packages that depend on the ones
+/// being removed, so its dry run is checked first).
+fn remove_packages(
+    backend: Backend,
+    packages: &[String],
+    with_unneeded: bool,
+) -> Result<u64, String> {
+    if backend.lock_file().is_some_and(|l| Path::new(l).exists()) {
         return Err(busy());
     }
-    let db = Path::new(PACMAN_DB);
-    let before: HashMap<String, u64> = read_pacman_db(db)
-        .into_iter()
-        .map(|e| (e.name, e.size))
-        .collect();
-    let mut args = vec!["-Rns", "--noconfirm", "--"];
-    args.extend(packages.iter().map(String::as_str));
-    command(PACMAN, &args)?;
-    let after: Vec<String> = read_pacman_db(db).into_iter().map(|e| e.name).collect();
+    let installed = backend.list();
+    let protected = backend.protected();
+    let preview = backend.preview_removal(packages, &installed)?;
+    let mut doomed: Vec<&str> = packages.iter().map(String::as_str).collect();
+    doomed.extend(preview.packages.iter().map(|(n, _)| n.as_str()));
+    if let Some(p) = doomed.iter().find(|p| protected.contains(**p)) {
+        return Err(format!(
+            "removing this would also remove {p}, which your system needs; nothing was removed"
+        ));
+    }
+
+    let before: HashMap<String, u64> = installed.into_iter().map(|e| (e.name, e.size)).collect();
+    let (program, args) = backend.remove_command(packages, with_unneeded);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    command(program, &args)?;
+    let after: Vec<String> = backend.list().into_iter().map(|e| e.name).collect();
     Ok(before
         .iter()
         .filter(|(name, _)| !after.contains(name))
@@ -239,13 +292,14 @@ fn command(program: &str, args: &[&str]) -> Result<(), String> {
     let output = Command::new(program)
         .args(args)
         .env("LC_ALL", "C")
+        .env("DEBIAN_FRONTEND", "noninteractive")
         .output()
         .map_err(|e| format!("couldn't run {program}: {e}"))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(lcc_core::privileged::explain_pacman_error(&stderr))
+    Err(explain_error(&stderr))
 }
 
 fn log_errors(errors: &[String]) {

@@ -8,8 +8,9 @@ use std::rc::Rc;
 use lcc_core::desktop;
 use lcc_core::format::{ago, count, human_size, now};
 use lcc_core::leftovers::flatpak_uninstall;
+use lcc_core::native::{NativePackage, Preview};
 use lcc_core::packages::{Package, Source, list_installed};
-use lcc_core::privileged::{Operation, preview_package_removal, run_privileged};
+use lcc_core::privileged::{Operation, run_privileged};
 use lcc_core::remove::remove;
 use lcc_core::safety::PathGuard;
 use lcc_core::settings::{DeleteMode, Settings};
@@ -173,7 +174,7 @@ impl RelmListItem for PackageRow {
         w.subtitle.set_label(&subtitle);
         w.subtitle.set_tooltip_text(Some(&subtitle));
         w.tag
-            .set_label(&if p.explicit || p.source != Source::Pacman {
+            .set_label(&if p.explicit || !matches!(p.source, Source::Native(_)) {
                 p.source.name().to_owned()
             } else {
                 format!("{} · dependency", p.source.name())
@@ -182,8 +183,7 @@ impl RelmListItem for PackageRow {
 
         let (sensitive, tooltip) = match (p.source, p.protected) {
             (_, Some(why)) => (false, why),
-            (Source::Pacman, None) => (true, "Uninstall…"),
-            (Source::Flatpak, None) => (true, "Uninstall…"),
+            (Source::Native(_) | Source::Flatpak | Source::Snap, None) => (true, "Uninstall…"),
             (Source::AppImage, None) => (true, "Remove…"),
         };
         w.remove.set_sensitive(sensitive);
@@ -235,10 +235,10 @@ pub enum SoftwareOutput {
 #[derive(Debug)]
 pub enum SoftwareCmd {
     Loaded(Vec<Package>),
-    /// What uninstalling a pacman package would remove.
+    /// What uninstalling a system package would remove.
     Preview {
         pkg: Package,
-        result: Result<Vec<(String, u64)>, String>,
+        result: Result<Preview, String>,
     },
     Uninstalled {
         name: String,
@@ -469,7 +469,7 @@ impl Component for SoftwarePage {
                 stack.set_visible_child_name("list");
             }
             SoftwareCmd::Preview { pkg, result } => match result {
-                Ok(removed) => confirm_pacman_removal(pkg, &removed, stack, &sender),
+                Ok(preview) => confirm_package_removal(pkg, &preview, stack, &sender),
                 Err(e) => {
                     let dialog = adw::AlertDialog::new(
                         Some(&format!("Can't uninstall {}", pkg.display_name)),
@@ -533,14 +533,33 @@ impl SoftwarePage {
 
     fn ask_uninstall(&self, pkg: Package, parent: &gtk::Stack, sender: &ComponentSender<Self>) {
         let (heading, body, action) = match pkg.source {
-            Source::Pacman => {
+            Source::Native(backend) => {
                 let names = vec![pkg.name.clone()];
+                // Sizes for the preview, from what's already listed.
+                let installed: Vec<NativePackage> = self
+                    .all
+                    .iter()
+                    .filter(|p| p.source == pkg.source)
+                    .map(|p| NativePackage {
+                        name: p.name.clone(),
+                        size: p.size,
+                        ..NativePackage::default()
+                    })
+                    .collect();
                 sender.spawn_oneshot_command(move || SoftwareCmd::Preview {
-                    result: preview_package_removal(&names),
+                    result: backend.preview_removal(&names, &installed),
                     pkg,
                 });
                 return;
             }
+            Source::Snap => (
+                format!("Uninstall {}?", pkg.display_name),
+                format!(
+                    "Removes the snap ({}). You'll be asked for your password.",
+                    human_size(pkg.size)
+                ),
+                "Uninstall",
+            ),
             Source::Flatpak => (
                 format!("Uninstall {}?", pkg.display_name),
                 format!(
@@ -584,19 +603,24 @@ impl SoftwarePage {
     }
 }
 
-fn confirm_pacman_removal(
+fn confirm_package_removal(
     pkg: Package,
-    removed: &[(String, u64)],
+    preview: &Preview,
     parent: &gtk::Stack,
     sender: &ComponentSender<SoftwarePage>,
 ) {
+    let removed = &preview.packages;
     let size: u64 = removed.iter().map(|(_, s)| s).sum();
     let others: Vec<&str> = removed
         .iter()
         .map(|(n, _)| n.as_str())
         .filter(|n| *n != pkg.name)
         .collect();
-    let mut body = format!("Frees {}.", human_size(size));
+    let mut body = if preview.complete {
+        format!("Frees {}.", human_size(size))
+    } else {
+        format!("Frees at least {}.", human_size(size))
+    };
     if !others.is_empty() {
         let shown: Vec<&str> = others.iter().take(12).copied().collect();
         let more = others.len().saturating_sub(shown.len());
@@ -615,6 +639,9 @@ fn confirm_pacman_removal(
                 String::new()
             }
         ));
+    }
+    if !preview.complete {
+        body.push_str("\n\nDependencies that nothing else needs are removed too.");
     }
     body.push_str("\n\nYou'll be asked for your password.");
     let dialog = adw::AlertDialog::new(
@@ -652,9 +679,15 @@ fn launchers_for(path: &Path) -> Vec<PathBuf> {
 
 fn uninstall(pkg: &Package, mode: DeleteMode, guard: &PathGuard) -> Result<(), String> {
     match pkg.source {
-        Source::Pacman => {
-            let op = Operation::RemovePackages {
-                packages: vec![pkg.name.clone()],
+        Source::Native(_) | Source::Snap => {
+            let op = if pkg.source == Source::Snap {
+                Operation::RemoveSnaps {
+                    names: vec![pkg.name.clone()],
+                }
+            } else {
+                Operation::RemovePackages {
+                    packages: vec![pkg.name.clone()],
+                }
             };
             match run_privileged(&[op])?.into_iter().find_map(|r| r.error) {
                 None => Ok(()),

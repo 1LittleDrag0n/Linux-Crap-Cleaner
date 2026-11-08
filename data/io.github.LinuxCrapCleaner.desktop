@@ -6,6 +6,6 @@ Comment=Find what's filling your disk and clean it safely
 Exec=linux-crap-cleaner
 Icon=io.github.LinuxCrapCleaner
 Terminal=false
-Categories=GTK;System;Utility;
+Categories=GTK;System;Filesystem;
 Keywords=clean;cleaner;disk;storage;space;junk;cache;duplicates;uninstall;
 StartupNotify=true

@@ -9,64 +9,8 @@
 //! Several operations can run in one call (separated by `--`), so one
 //! password prompt covers a whole cleanup.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Packages that must never be removed from the GUI.
-pub const CRITICAL_PACKAGES: &[&str] = &[
-    "base",
-    "base-devel",
-    "filesystem",
-    "glibc",
-    "gcc-libs",
-    "bash",
-    "coreutils",
-    "pacman",
-    "pacman-mirrorlist",
-    "archlinux-keyring",
-    "cachyos-keyring",
-    "cachyos-mirrorlist",
-    "systemd",
-    "systemd-libs",
-    "systemd-sysvcompat",
-    "linux-firmware",
-    "mkinitcpio",
-    "dracut",
-    "grub",
-    "limine",
-    "systemd-boot-manager",
-    "refind",
-    "efibootmgr",
-    "sudo",
-    "doas",
-    "util-linux",
-    "shadow",
-    "pam",
-    "dbus",
-    "dbus-broker",
-    "polkit",
-    "glib2",
-    "openssl",
-    "zlib",
-    "xz",
-    "zstd",
-    "sed",
-    "grep",
-    "gawk",
-    "tar",
-    "gzip",
-    "findutils",
-    "procps-ng",
-    "iproute2",
-    "kmod",
-    "e2fsprogs",
-    "btrfs-progs",
-    "xfsprogs",
-    "dosfstools",
-    "cryptsetup",
-    "lvm2",
-];
 
 /// One task for the helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +27,10 @@ pub enum Operation {
     CleanCoredumps,
     /// Delete rotated and compressed logs in /var/log.
     CleanOldLogs,
+    /// Remove old (disabled) snap revisions: `(snap name, revision)`.
+    RemoveSnapRevisions { revisions: Vec<(String, u32)> },
+    /// Uninstall snaps.
+    RemoveSnaps { names: Vec<String> },
 }
 
 impl Operation {
@@ -94,6 +42,8 @@ impl Operation {
             Operation::RemovePackages { .. } => "remove-packages",
             Operation::CleanCoredumps => "clean-coredumps",
             Operation::CleanOldLogs => "clean-old-logs",
+            Operation::RemoveSnapRevisions { .. } => "remove-snap-revisions",
+            Operation::RemoveSnaps { .. } => "remove-snaps",
         }
     }
 
@@ -106,6 +56,12 @@ impl Operation {
             Operation::RemoveOrphans { packages } | Operation::RemovePackages { packages } => {
                 args.extend(packages.iter().cloned())
             }
+            Operation::RemoveSnapRevisions { revisions } => args.extend(
+                revisions
+                    .iter()
+                    .map(|(name, rev)| crate::snap::revision_arg(name, *rev)),
+            ),
+            Operation::RemoveSnaps { names } => args.extend(names.iter().cloned()),
             Operation::CleanCoredumps | Operation::CleanOldLogs => {}
         }
         args
@@ -124,7 +80,7 @@ pub fn ops_to_args(ops: &[Operation]) -> Vec<String> {
     args
 }
 
-/// pacman package names: letters, digits and `@._+-`, not starting with
+/// Package names (any package manager): letters, digits and `@._+-`, not starting with
 /// `-` or `.`.
 pub fn valid_package_name(name: &str) -> bool {
     !name.is_empty()
@@ -133,27 +89,6 @@ pub fn valid_package_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"@._+-".contains(&b))
-}
-
-/// The package of the running kernel, from `/usr/lib/modules/<release>/pkgbase`.
-pub fn running_kernel_package() -> Option<String> {
-    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
-    let base =
-        std::fs::read_to_string(format!("/usr/lib/modules/{}/pkgbase", release.trim())).ok()?;
-    Some(base.trim().to_owned()).filter(|s| !s.is_empty())
-}
-
-/// Why a package may not be removed, if it may not.
-pub fn protected_package(name: &str, running_kernel: Option<&str>) -> Option<&'static str> {
-    if CRITICAL_PACKAGES.contains(&name) {
-        Some("Your system needs it to start and work")
-    } else if running_kernel == Some(name)
-        || running_kernel.is_some_and(|k| name == format!("{k}-headers"))
-    {
-        Some("It's the kernel you're running right now")
-    } else {
-        None
-    }
 }
 
 /// Parses the helper's command line. Rejects anything unexpected.
@@ -200,6 +135,30 @@ pub fn parse_args(args: &[String]) -> Result<Vec<Operation>, String> {
             "remove-packages" => Operation::RemovePackages {
                 packages: packages()?,
             },
+            "remove-snap-revisions" => {
+                if rest.is_empty() || rest.len() > 500 {
+                    return Err(format!("{name}: expected 1 to 500 snap revisions"));
+                }
+                let revisions = rest
+                    .iter()
+                    .map(|a| {
+                        crate::snap::parse_revision_arg(a)
+                            .ok_or_else(|| format!("{name}: invalid snap revision {a:?}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Operation::RemoveSnapRevisions { revisions }
+            }
+            "remove-snaps" => {
+                if rest.is_empty() || rest.len() > 100 {
+                    return Err(format!("{name}: expected 1 to 100 snap names"));
+                }
+                if let Some(bad) = rest.iter().find(|n| !crate::snap::valid_snap_name(n)) {
+                    return Err(format!("{name}: invalid snap name {bad:?}"));
+                }
+                Operation::RemoveSnaps {
+                    names: rest.to_vec(),
+                }
+            }
             "clean-coredumps" => no_args(Operation::CleanCoredumps)?,
             "clean-old-logs" => no_args(Operation::CleanOldLogs)?,
             other => return Err(format!("unknown operation {other:?}")),
@@ -261,14 +220,31 @@ pub fn parse_report(output: &str) -> Vec<OpReport> {
 /// Where the installed helper lives.
 pub const INSTALLED_HELPER: &str = "/usr/lib/linux-crap-cleaner/lcc-helper";
 
-/// Finds the helper: next to the running program (a development build), or
-/// the installed one.
-pub fn helper_path() -> Option<PathBuf> {
+/// First argument that makes the app run the helper instead of the window
+/// (used inside an AppImage, where the helper can't be started directly).
+pub const HELPER_FLAG: &str = "--lcc-helper";
+
+/// How to start the helper: a program and the arguments that come before the
+/// operations.
+///
+/// * Inside an AppImage the helper lives in a mount only the user can read,
+///   so pkexec runs the AppImage file itself with [`HELPER_FLAG`]; the app
+///   then hands over to the bundled helper.
+/// * A development build uses the helper next to it.
+/// * Otherwise the installed helper.
+pub fn helper_command() -> Option<(PathBuf, Vec<String>)> {
+    if let Some(appimage) = std::env::var_os("APPIMAGE").map(PathBuf::from)
+        && appimage.is_file()
+    {
+        return Some((appimage, vec![HELPER_FLAG.to_owned()]));
+    }
     let sibling = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|d| d.join("lcc-helper")))
         .filter(|p| p.is_file());
-    sibling.or_else(|| Some(PathBuf::from(INSTALLED_HELPER)).filter(|p| p.is_file()))
+    sibling
+        .or_else(|| Some(PathBuf::from(INSTALLED_HELPER)).filter(|p| p.is_file()))
+        .map(|p| (p, Vec::new()))
 }
 
 /// Runs operations as administrator through `pkexec`. Blocks until done,
@@ -278,9 +254,11 @@ pub fn run_privileged(ops: &[Operation]) -> Result<Vec<OpReport>, String> {
     if ops.is_empty() {
         return Ok(Vec::new());
     }
-    let helper = helper_path().ok_or("The administrator helper (lcc-helper) isn't installed.")?;
+    let (helper, prefix) =
+        helper_command().ok_or("The administrator helper (lcc-helper) isn't installed.")?;
     let output = Command::new("pkexec")
         .arg(&helper)
+        .args(prefix)
         .args(ops_to_args(ops))
         .output()
         .map_err(|e| format!("Couldn't ask for the administrator password: {e}"))?;
@@ -299,56 +277,6 @@ pub fn run_privileged(ops: &[Operation]) -> Result<Vec<OpReport>, String> {
         )),
         _ => Ok(reports),
     }
-}
-
-/// Asks pacman (without root) what removing `packages` with `-Rns` would
-/// remove: package names and installed sizes. Fails with pacman's message if
-/// the removal isn't possible, for example because another package needs
-/// one of them.
-pub fn preview_package_removal(packages: &[String]) -> Result<Vec<(String, u64)>, String> {
-    if packages.iter().any(|p| !valid_package_name(p)) {
-        return Err("invalid package name".to_owned());
-    }
-    let output = Command::new("pacman")
-        .args(["-Rnsp", "--print-format", "%n %s", "--"])
-        .args(packages)
-        .env("LC_ALL", "C")
-        .output()
-        .map_err(|e| format!("couldn't run pacman: {e}"))?;
-    if !output.status.success() {
-        return Err(explain_pacman_error(&String::from_utf8_lossy(
-            &output.stderr,
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|l| {
-            let (name, size) = l.split_once(' ')?;
-            Some((name.to_owned(), size.trim().parse().unwrap_or(0)))
-        })
-        .collect())
-}
-
-/// Turns pacman's dependency errors into a friendly sentence.
-pub fn explain_pacman_error(stderr: &str) -> String {
-    let needed_by: Vec<&str> = stderr
-        .lines()
-        .filter_map(|l| l.split_once("required by ").map(|(_, who)| who.trim()))
-        .collect();
-    if !needed_by.is_empty() {
-        let mut who: Vec<&str> = needed_by;
-        who.sort();
-        who.dedup();
-        return format!("Other software needs it: {}", who.join(", "));
-    }
-    stderr
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("pacman refused")
-        .trim()
-        .trim_start_matches("error: ")
-        .to_owned()
 }
 
 /// Deletes regular files (never symlinks or folders) that are inside
@@ -380,14 +308,6 @@ pub fn delete_files_inside(files: &[PathBuf], allowed_root: &Path) -> (u64, Vec<
     (freed, errors)
 }
 
-/// Names of currently installed packages.
-pub fn installed_package_names(db: &Path) -> HashSet<String> {
-    crate::packages::read_pacman_db(db)
-        .into_iter()
-        .map(|e| e.name)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +329,12 @@ mod tests {
             Operation::RemovePackages {
                 packages: vec!["gtk+3".into()],
             },
+            Operation::RemoveSnapRevisions {
+                revisions: vec![("firefox".into(), 5091), ("gnome-42-2204".into(), 176)],
+            },
+            Operation::RemoveSnaps {
+                names: vec!["spotify".into()],
+            },
         ];
         assert_eq!(parse_args(&ops_to_args(&ops)).unwrap(), ops);
     }
@@ -428,6 +354,12 @@ mod tests {
             "remove-packages foo;reboot",
             "clean-coredumps /etc",
             "clean-old-logs -- ",
+            "remove-snap-revisions",
+            "remove-snap-revisions firefox",
+            "remove-snap-revisions firefox=abc",
+            "remove-snap-revisions ../x=1",
+            "remove-snaps Firefox",
+            "remove-snaps --purge",
         ] {
             assert!(parse_args(&args(bad)).is_err(), "{bad:?} must be rejected");
         }
@@ -451,15 +383,6 @@ mod tests {
     }
 
     #[test]
-    fn protects_critical_and_running_kernel() {
-        assert!(protected_package("glibc", None).is_some());
-        assert!(protected_package("linux-cachyos", Some("linux-cachyos")).is_some());
-        assert!(protected_package("linux-cachyos-headers", Some("linux-cachyos")).is_some());
-        assert!(protected_package("linux-lts", Some("linux-cachyos")).is_none());
-        assert!(protected_package("firefox", Some("linux-cachyos")).is_none());
-    }
-
-    #[test]
     fn report_lines() {
         let reports = [
             OpReport {
@@ -478,30 +401,6 @@ mod tests {
         let parsed = parse_report(&noise);
         assert_eq!(parsed[0], reports[0]);
         assert_eq!(parsed[1].error.as_deref(), Some("pacman is busy retry"));
-    }
-
-    #[test]
-    fn friendly_pacman_errors() {
-        let stderr = "checking dependencies...\nerror: failed to prepare transaction (could not satisfy dependencies)\n:: removing gtk3 breaks dependency 'gtk3' required by firefox\n:: removing gtk3 breaks dependency 'gtk3' required by gimp\n";
-        assert_eq!(
-            explain_pacman_error(stderr),
-            "Other software needs it: firefox, gimp"
-        );
-        assert_eq!(
-            explain_pacman_error("error: target not found: nope\n"),
-            "target not found: nope"
-        );
-    }
-
-    #[test]
-    fn previews_removal_without_root() {
-        if !Path::new("/var/lib/pacman/local").is_dir() {
-            return;
-        }
-        // Removing pacman itself is refused by pacman: other packages need it.
-        let result = preview_package_removal(&["pacman".to_owned()]);
-        assert!(result.is_err());
-        assert!(preview_package_removal(&["--help".to_owned()]).is_err());
     }
 
     #[test]

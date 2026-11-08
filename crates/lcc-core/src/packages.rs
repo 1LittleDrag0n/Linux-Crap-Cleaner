@@ -11,20 +11,24 @@ use std::process::Command;
 use rayon::prelude::*;
 
 use crate::desktop::{self, DesktopEntry};
+use crate::native::Backend;
 
 /// Where a piece of software came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Source {
-    Pacman,
+    /// The system package manager.
+    Native(Backend),
     Flatpak,
+    Snap,
     AppImage,
 }
 
 impl Source {
     pub fn name(self) -> &'static str {
         match self {
-            Source::Pacman => "pacman",
+            Source::Native(b) => b.name(),
             Source::Flatpak => "Flatpak",
+            Source::Snap => "Snap",
             Source::AppImage => "AppImage",
         }
     }
@@ -122,36 +126,6 @@ pub fn read_pacman_db(db: &Path) -> Vec<PacmanEntry> {
         .collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
-}
-
-/// Which package owns each launcher in `/usr/share/applications`, from the
-/// database's file lists. Keys are launcher ids (file name without
-/// `.desktop`).
-pub fn pacman_launcher_owners(db: &Path) -> HashMap<String, String> {
-    let Ok(read) = std::fs::read_dir(db) else {
-        return HashMap::new();
-    };
-    let dirs: Vec<PathBuf> = read
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.par_iter()
-        .filter_map(|d| {
-            let files = std::fs::read_to_string(d.join("files")).ok()?;
-            let desc = std::fs::read_to_string(d.join("desc")).ok()?;
-            let name = parse_pacman_desc(&desc).name;
-            let owned: Vec<(String, String)> = files
-                .lines()
-                .filter_map(|l| l.strip_prefix("usr/share/applications/"))
-                .filter_map(|f| f.strip_suffix(".desktop"))
-                .filter(|id| !id.contains('/'))
-                .map(|id| (id.to_owned(), name.clone()))
-                .collect();
-            Some(owned)
-        })
-        .flatten()
-        .collect()
 }
 
 /// How well a launcher represents a package (lower is better): a launcher
@@ -324,35 +298,54 @@ pub fn appimage_name_version(file_name: &str) -> (String, String) {
     }
 }
 
-/// Everything installed, from every source found on this system. Slow-ish
-/// (reads the whole package database), so call it off the main thread.
-pub fn list_installed() -> Vec<Package> {
-    let launchers = desktop::read_all();
-    let mut packages = Vec::new();
+/// Why a package may not be removed.
+pub const PROTECTED_SYSTEM: &str = "Your system needs it to start and work";
+pub const PROTECTED_KERNEL: &str = "It's the kernel you're running right now";
 
-    let db = Path::new(PACMAN_DB);
-    let kernel = crate::privileged::running_kernel_package();
-    if db.is_dir() {
-        let owners = pacman_launcher_owners(db);
-        // Package name → its most fitting visible launcher.
-        let mut by_package: HashMap<&str, &DesktopEntry> = HashMap::new();
-        for (id, pkg) in &owners {
-            let Some(entry) = launchers.get(id).filter(|e| !e.hidden && e.is_application) else {
-                continue;
-            };
-            by_package
-                .entry(pkg.as_str())
-                .and_modify(|best| {
-                    if launcher_rank(pkg, entry) < launcher_rank(pkg, best) {
-                        *best = entry;
-                    }
-                })
-                .or_insert(entry);
-        }
-        for e in read_pacman_db(db) {
+/// Packages from the system package manager, with names and icons from their
+/// launchers.
+fn native_packages(backend: Backend, launchers: &HashMap<String, DesktopEntry>) -> Vec<Package> {
+    let system_launchers: Vec<PathBuf> =
+        ["/usr/share/applications", "/usr/local/share/applications"]
+            .iter()
+            .flat_map(|d| desktop::read_dir_entries(Path::new(d)))
+            .map(|e| e.path)
+            .collect();
+    let owners = backend.owners_of(&system_launchers);
+    // Package name → its most fitting visible launcher.
+    let mut by_package: HashMap<&str, &DesktopEntry> = HashMap::new();
+    for (path, pkg) in &owners {
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(entry) = launchers.get(id).filter(|e| !e.hidden && e.is_application) else {
+            continue;
+        };
+        by_package
+            .entry(pkg.as_str())
+            .and_modify(|best| {
+                if launcher_rank(pkg, entry) < launcher_rank(pkg, best) {
+                    *best = entry;
+                }
+            })
+            .or_insert(entry);
+    }
+
+    let protected = backend.protected();
+    let kernel = backend.kernel_package();
+    backend
+        .list()
+        .into_iter()
+        .map(|e| {
             let launcher = by_package.get(e.name.as_str());
-            let protected = crate::privileged::protected_package(&e.name, kernel.as_deref());
-            packages.push(Package {
+            let reason = if kernel.as_deref() == Some(e.name.as_str()) {
+                Some(PROTECTED_KERNEL)
+            } else if protected.contains(&e.name) {
+                Some(PROTECTED_SYSTEM)
+            } else {
+                None
+            };
+            Package {
                 display_name: launcher
                     .map(|l| l.name.clone())
                     .filter(|n| !n.is_empty())
@@ -362,16 +355,64 @@ pub fn list_installed() -> Vec<Package> {
                 name: e.name,
                 version: e.version,
                 description: e.description,
-                source: Source::Pacman,
+                source: Source::Native(backend),
                 size: e.size,
                 installed: e.install_date,
-                explicit: !e.as_dependency,
+                explicit: e.explicit,
                 path: None,
                 installation: None,
-                protected,
-            });
-        }
+                protected: reason,
+            }
+        })
+        .collect()
+}
+
+/// Installed snaps (current revisions only).
+fn snap_packages() -> Vec<Package> {
+    let all = crate::snap::list_all();
+    if all.is_empty() {
+        return Vec::new();
     }
+    let launchers = crate::snap::launchers();
+    all.into_iter()
+        .filter(|s| !s.disabled())
+        .map(|s| {
+            let launcher = launchers.get(&s.name);
+            let size = s.size();
+            Package {
+                display_name: launcher
+                    .map(|l| l.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| s.name.clone()),
+                icon: launcher.and_then(|l| l.icon.clone()),
+                is_app: launcher.is_some() && !s.is_system(),
+                description: launcher.map(|l| l.comment.clone()).unwrap_or_default(),
+                installed: std::fs::metadata(s.file())
+                    .ok()
+                    .map(|m| std::os::unix::fs::MetadataExt::mtime(&m)),
+                protected: s.is_system().then_some(PROTECTED_SYSTEM),
+                name: s.name,
+                version: s.version,
+                source: Source::Snap,
+                size,
+                explicit: true,
+                path: None,
+                installation: None,
+            }
+        })
+        .collect()
+}
+
+/// Everything installed, from every source found on this system. Slow-ish
+/// (reads the whole package database), so call it off the main thread.
+pub fn list_installed() -> Vec<Package> {
+    let launchers = desktop::read_all();
+    let mut packages = Vec::new();
+
+    if let Some(backend) = Backend::detect() {
+        packages.extend(native_packages(backend, &launchers));
+    }
+    packages.extend(snap_packages());
 
     for f in flatpak_list(false) {
         let launcher = launchers.get(&f.id);

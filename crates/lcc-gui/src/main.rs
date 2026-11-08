@@ -24,8 +24,25 @@ fn main() {
         )
         .init();
 
-    // Background usage tracker (started by a systemd user service): no GUI.
     let args: Vec<String> = std::env::args().collect();
+
+    // Inside an AppImage, pkexec runs the AppImage itself with this flag;
+    // hand over to the bundled administrator helper next to this program.
+    if args.get(1).map(String::as_str) == Some(lcc_core::privileged::HELPER_FLAG) {
+        use std::os::unix::process::CommandExt;
+        let helper = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("lcc-helper")));
+        let Some(helper) = helper.filter(|h| h.is_file()) else {
+            eprintln!("lcc-helper not found next to the app");
+            std::process::exit(2);
+        };
+        let err = std::process::Command::new(helper).args(&args[2..]).exec();
+        eprintln!("couldn't start lcc-helper: {err}");
+        std::process::exit(2);
+    }
+
+    // Background usage tracker (started by a systemd user service): no GUI.
     if args.iter().any(|a| a == "--track-usage") {
         let once = args.iter().any(|a| a == "--once");
         if let Err(e) = lcc_core::usage::run_tracker(std::time::Duration::from_secs(60), once) {

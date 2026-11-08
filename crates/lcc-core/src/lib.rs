@@ -10,12 +10,14 @@ pub mod duplicates;
 pub mod format;
 pub mod junk;
 pub mod leftovers;
+pub mod native;
 pub mod packages;
 pub mod privileged;
 pub mod remove;
 pub mod safety;
 pub mod scan;
 pub mod settings;
+pub mod snap;
 pub mod system;
 pub mod usage;
 

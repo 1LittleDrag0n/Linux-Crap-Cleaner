@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.LinuxCrapCleaner</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Linux Crap Cleaner</name>
+  <summary>Find what's filling your disk and clean it safely</summary>
+  <developer id="io.github.linuxcrapcleaner">
+    <name>Linux Crap Cleaner contributors</name>
+  </developer>
+  <description>
+    <p>
+      A friendly system cleaner in the spirit of CCleaner. It shows what takes up
+      space and removes junk safely: nothing is deleted until you've seen a
+      preview and confirmed, files go to the Trash by default, and system and
+      private files are always protected.
+    </p>
+    <ul>
+      <li>Junk Cleaner: browser, app and developer caches, old package versions, logs, old Snap versions</li>
+      <li>Storage Analyzer: see which folders are biggest in a clickable ring chart</li>
+      <li>System Leftovers: orphan packages, unused Flatpak runtimes, settings of removed apps, broken launchers</li>
+      <li>Installed Software: every package, Flatpak, Snap and AppImage with its size</li>
+      <li>Duplicates and big files, compared by content</li>
+      <li>App Usage: apps you haven't opened for months</li>
+    </ul>
+    <p>
+      Works with pacman (Arch, CachyOS, Manjaro), APT (Debian, Ubuntu, Mint),
+      DNF (Fedora) and Zypper (openSUSE). Tasks that need administrator rights
+      ask for your password through polkit.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.LinuxCrapCleaner.desktop</launchable>
+  <provides>
+    <binary>linux-crap-cleaner</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>Filesystem</category>
+  </categories>
+  <keywords>
+    <keyword>clean</keyword>
+    <keyword>cleaner</keyword>
+    <keyword>disk</keyword>
+    <keyword>storage</keyword>
+    <keyword>junk</keyword>
+    <keyword>cache</keyword>
+    <keyword>duplicates</keyword>
+    <keyword>uninstall</keyword>
+  </keywords>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-08">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

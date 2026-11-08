@@ -17,7 +17,8 @@ use std::process::Command;
 
 use crate::desktop::{self, DesktopEntry};
 use crate::junk::{Places, measure};
-use crate::packages::{self, FlatpakRef, PacmanEntry};
+use crate::native::{Backend, NativePackage};
+use crate::packages::{self, FlatpakRef};
 use crate::safety::PathGuard;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,7 +58,7 @@ impl Category {
     pub fn description(self) -> &'static str {
         match self {
             Category::Packages => {
-                "Installed as dependencies of apps that have since been removed. Nothing needs them now."
+                "Installed as dependencies of apps that have since been removed (or old kernels on Ubuntu and Debian). Nothing needs them now."
             }
             Category::Flatpak => {
                 "Runtimes no installed app uses, and data of Flatpak apps you removed."
@@ -107,12 +108,9 @@ pub struct Leftover {
 
 /// Looks for every kind of leftover. Slow-ish; call off the main thread.
 pub fn find_leftovers(places: &Places, guard: &PathGuard) -> Vec<Leftover> {
-    let db = Path::new(packages::PACMAN_DB);
-    let pacman = if db.is_dir() {
-        packages::read_pacman_db(db)
-    } else {
-        Vec::new()
-    };
+    let backend = Backend::detect();
+    let installed = backend.map(Backend::list).unwrap_or_default();
+    let orphans = backend.map(|b| b.orphans(&installed)).unwrap_or_default();
     let flatpak_apps = packages::flatpak_list(false);
     let flatpak_runtimes = packages::flatpak_list(true);
     let launchers = desktop::read_all();
@@ -120,7 +118,7 @@ pub fn find_leftovers(places: &Places, guard: &PathGuard) -> Vec<Leftover> {
     let now = now();
 
     let mut found = Vec::new();
-    found.extend(orphan_leftovers(&pacman));
+    found.extend(orphan_leftovers(&orphans));
     found.extend(unused_runtimes(&flatpak_apps, &flatpak_runtimes));
     let app_ids: HashSet<String> = flatpak_apps.iter().map(|f| f.id.clone()).collect();
     found.extend(removed_flatpak_data(
@@ -128,7 +126,7 @@ pub fn find_leftovers(places: &Places, guard: &PathGuard) -> Vec<Leftover> {
         &app_ids,
     ));
 
-    let known = known_app_names(&pacman, &flatpak_apps, launchers.values(), &path_var);
+    let known = known_app_names(&installed, &flatpak_apps, launchers.values(), &path_var);
     for dir in [&places.config, &places.data] {
         found.extend(app_settings_leftovers(dir, &known, now));
     }
@@ -150,9 +148,7 @@ pub fn find_leftovers(places: &Places, guard: &PathGuard) -> Vec<Leftover> {
     for dir in packages::appimage_dirs(&places.home) {
         found.extend(unfinished_downloads(&dir, now));
     }
-    if db.is_dir() {
-        found.extend(pacnew_files(Path::new("/etc")));
-    }
+    found.extend(config_review_files(Path::new("/etc")));
 
     // Everything removable must pass the safety rules.
     found.retain(|l| match (&l.action, &l.path) {
@@ -170,9 +166,9 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn orphan_leftovers(db: &[PacmanEntry]) -> Vec<Leftover> {
-    packages::pacman_orphans(db)
-        .into_iter()
+pub fn orphan_leftovers(orphans: &[NativePackage]) -> Vec<Leftover> {
+    orphans
+        .iter()
         .map(|e| Leftover {
             category: Category::Packages,
             name: e.name.clone(),
@@ -373,7 +369,7 @@ const NEVER_FLAG: &[&str] = &[
 /// Names that identify installed software: package names and their
 /// distinctive parts, Flatpak ids, launcher names and programs in `PATH`.
 pub fn known_app_names<'a>(
-    pacman: &[PacmanEntry],
+    installed: &[NativePackage],
     flatpak_apps: &[FlatpakRef],
     launchers: impl Iterator<Item = &'a DesktopEntry>,
     path_var: &std::ffi::OsStr,
@@ -385,7 +381,7 @@ pub fn known_app_names<'a>(
             known.insert(n);
         }
     };
-    for p in pacman {
+    for p in installed {
         add(&p.name);
         for part in p.name.split(['-', '_', '.']) {
             if part.len() >= 4 && !GENERIC.contains(&part) {
@@ -591,7 +587,31 @@ pub fn unfinished_downloads(dir: &Path, now: i64) -> Vec<Leftover> {
 }
 
 /// `.pacnew` and `.pacsave` files under `root` (normally `/etc`).
-pub fn pacnew_files(root: &Path) -> Vec<Leftover> {
+/// Endings package managers give configuration files they couldn't merge:
+/// the new default saved next to your edited file, or your file saved when a
+/// package was removed.
+const CONFIG_SUFFIXES: &[(&str, &str)] = &[
+    (".pacnew", "New default settings from an update"),
+    (
+        ".pacsave",
+        "Your old settings, saved when a package was removed",
+    ),
+    (".rpmnew", "New default settings from an update"),
+    (
+        ".rpmsave",
+        "Your old settings, saved when a package was removed or updated",
+    ),
+    (".dpkg-dist", "New default settings from an update"),
+    (".dpkg-new", "New default settings from an update"),
+    (".ucf-dist", "New default settings from an update"),
+    (".dpkg-old", "Your old settings, kept by an update"),
+    (".ucf-old", "Your old settings, kept by an update"),
+];
+
+/// Configuration files waiting for review under `root` (normally `/etc`):
+/// `.pacnew`/`.pacsave` (pacman), `.rpmnew`/`.rpmsave` (DNF, Zypper) and
+/// `.dpkg-dist`/`.dpkg-old`/`.ucf-dist` (APT).
+pub fn config_review_files(root: &Path) -> Vec<Leftover> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -606,11 +626,10 @@ pub fn pacnew_files(root: &Path) -> Vec<Leftover> {
                 continue;
             }
             let name = e.file_name().to_string_lossy().into_owned();
-            let kind = if name.ends_with(".pacnew") {
-                "New default settings from an update"
-            } else if name.ends_with(".pacsave") {
-                "Your old settings, saved when a package was removed"
-            } else {
+            let Some((_, kind)) = CONFIG_SUFFIXES
+                .iter()
+                .find(|(suffix, _)| name.ends_with(suffix))
+            else {
                 continue;
             };
             let meta = std::fs::symlink_metadata(&path).ok();
@@ -751,11 +770,16 @@ mod tests {
 
     #[test]
     fn known_names_from_packages() {
-        let pacman = vec![PacmanEntry {
+        let installed = vec![NativePackage {
             name: "intellij-idea-community-edition".into(),
             ..Default::default()
         }];
-        let known = known_app_names(&pacman, &[], std::iter::empty(), std::ffi::OsStr::new(""));
+        let known = known_app_names(
+            &installed,
+            &[],
+            std::iter::empty(),
+            std::ffi::OsStr::new(""),
+        );
         assert!(known.contains("intellij"));
         assert!(known.contains("community"));
         assert!(!known.contains("bin"));
@@ -834,13 +858,16 @@ mod tests {
     }
 
     #[test]
-    fn finds_pacnew_files() {
+    fn finds_config_files_to_review() {
         let t = Temp::new("etc");
         t.file("pacman.conf.pacnew", "x");
         t.file("ssh/sshd_config.pacsave", "x");
+        t.file("dnf/dnf.conf.rpmnew", "x");
+        t.file("default/grub.ucf-dist", "x");
+        t.file("apt/sources.list.dpkg-old", "x");
         t.file("fstab", "x");
-        let found = pacnew_files(&t.0);
-        assert_eq!(found.len(), 2);
+        let found = config_review_files(&t.0);
+        assert_eq!(found.len(), 5);
         assert!(found.iter().all(|l| l.action == Action::Review));
     }
 }

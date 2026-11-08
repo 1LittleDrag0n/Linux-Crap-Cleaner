@@ -61,6 +61,8 @@ pub enum Kind {
     PackageCache,
     /// The systemd journal.
     Journal,
+    /// Older snap revisions kept after updates.
+    SnapRevisions,
 }
 
 /// One cleaner rule.
@@ -288,9 +290,19 @@ impl Finding {
     }
 }
 
-/// The administrator task that cleans a root-only cleaner.
-pub fn root_operation(cleaner: &Cleaner, keep_package_versions: u32) -> Option<Operation> {
+/// The administrator task that cleans a root-only finding.
+pub fn root_operation(finding: &Finding, keep_package_versions: u32) -> Option<Operation> {
+    let cleaner = &finding.cleaner;
     match (cleaner.kind, cleaner.id.as_str()) {
+        (Kind::SnapRevisions, _) => {
+            let revisions: Vec<(String, u32)> = finding
+                .items
+                .iter()
+                .filter_map(|i| i.path.file_name()?.to_str())
+                .filter_map(crate::snap::parse_snap_file)
+                .collect();
+            (!revisions.is_empty()).then_some(Operation::RemoveSnapRevisions { revisions })
+        }
         (Kind::PackageCache, _) => Some(Operation::CleanPackageCache {
             keep: keep_package_versions.min(10),
         }),
@@ -340,6 +352,17 @@ fn analyze_one(
     let (mut paths, note) = match cleaner.kind {
         Kind::Paths => (path_candidates(cleaner, all, places), None),
         Kind::PackageCache => package_cache_candidates(options.keep_package_versions),
+        Kind::SnapRevisions => (
+            crate::snap::disabled_revisions()
+                .iter()
+                .map(crate::snap::SnapEntry::file)
+                .filter(|f| f.exists())
+                .collect(),
+            Some(
+                "Snap keeps older versions after every update; the current versions stay."
+                    .to_owned(),
+            ),
+        ),
         Kind::Journal => {
             let journal = PathBuf::from("/var/log/journal");
             (
@@ -527,23 +550,26 @@ fn package_cache_candidates(keep: u32) -> (Vec<PathBuf>, Option<String>) {
         );
     }
 
-    // Other package managers: the whole cache can go.
-    for dir in [
-        "/var/cache/apt/archives",
-        "/var/cache/libdnf5",
-        "/var/cache/dnf",
-        "/var/cache/zypp/packages",
+    // Other package managers clear all downloaded package files (not their
+    // package lists, which `apt-get clean`/`dnf clean packages` keep).
+    let note = Some(
+        "Removes downloaded package files; they're downloaded again if ever needed.".to_owned(),
+    );
+    for patterns in [
+        &["/var/cache/apt/archives/*.deb"][..],
+        &[
+            "/var/cache/libdnf5/*/packages/*.rpm",
+            "/var/cache/dnf/*/packages/*.rpm",
+        ][..],
+        &[
+            "/var/cache/zypp/packages/*/*.rpm",
+            "/var/cache/zypp/packages/*/*/*.rpm",
+            "/var/cache/zypp/packages/*/*/*/*.rpm",
+        ][..],
     ] {
-        let dir = Path::new(dir);
-        if dir.is_dir() {
-            let items = std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| !p.ends_with("lock") && !p.ends_with("partial"))
-                .collect();
-            return (items, None);
+        let items: Vec<PathBuf> = patterns.iter().flat_map(|p| glob(p)).collect();
+        if !items.is_empty() {
+            return (items, note);
         }
     }
     (Vec::new(), None)
@@ -887,20 +913,47 @@ description = "y"
 
     #[test]
     fn every_root_cleaner_has_an_operation() {
+        let finding = |c: &Cleaner, items: Vec<Item>| Finding {
+            cleaner: c.clone(),
+            items,
+            size: 0,
+            files: 0,
+            status: Status::NeedsRoot,
+            note: None,
+        };
         for c in builtin_cleaners().iter().filter(|c| c.needs_root) {
+            let items = if c.kind == Kind::SnapRevisions {
+                vec![Item {
+                    path: PathBuf::from("/var/lib/snapd/snaps/firefox_5091.snap"),
+                    size: 1,
+                    files: 1,
+                }]
+            } else {
+                Vec::new()
+            };
             assert!(
-                root_operation(c, 2).is_some(),
+                root_operation(&finding(c, items), 2).is_some(),
                 "{} has no administrator task",
                 c.id
             );
         }
-        let cache = builtin_cleaners()
-            .into_iter()
-            .find(|c| c.id == "package-cache")
-            .unwrap();
+        let cleaners = builtin_cleaners();
+        let cache = cleaners.iter().find(|c| c.id == "package-cache").unwrap();
         assert_eq!(
-            root_operation(&cache, 99),
+            root_operation(&finding(cache, Vec::new()), 99),
             Some(Operation::CleanPackageCache { keep: 10 })
+        );
+        let snaps = cleaners.iter().find(|c| c.id == "snap-revisions").unwrap();
+        let items = vec![Item {
+            path: PathBuf::from("/var/lib/snapd/snaps/gnome-42-2204_176.snap"),
+            size: 1,
+            files: 1,
+        }];
+        assert_eq!(
+            root_operation(&finding(snaps, items), 2),
+            Some(Operation::RemoveSnapRevisions {
+                revisions: vec![("gnome-42-2204".into(), 176)]
+            })
         );
     }
 

@@ -105,7 +105,9 @@ impl SimpleComponent for SettingsPage {
 
         let keep_versions = adw::SpinRow::with_range(0.0, 10.0, 1.0);
         keep_versions.set_title("Package versions to keep");
-        keep_versions.set_subtitle("Older versions in the package cache are removed when cleaning");
+        keep_versions.set_subtitle(
+            "For pacman. Other package managers remove all downloaded packages when cleaning",
+        );
         {
             let sender = sender.clone();
             keep_versions.connect_value_notify(move |row| {

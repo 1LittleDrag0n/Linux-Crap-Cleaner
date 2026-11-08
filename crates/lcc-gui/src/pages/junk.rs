@@ -620,7 +620,7 @@ fn clean_everything(
     let system: Vec<(&Finding, Operation)> = chosen
         .iter()
         .filter(|f| f.needs_root())
-        .filter_map(|f| root_operation(&f.cleaner, keep).map(|op| (f, op)))
+        .filter_map(|f| root_operation(f, keep).map(|op| (f, op)))
         .collect();
     if system.is_empty() {
         return report;

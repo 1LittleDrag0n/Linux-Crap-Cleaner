@@ -10,7 +10,7 @@
 #   default      checked when first shown (only for things that are safe to lose)
 #   running      process names; while one runs, the cleaner is skipped
 #   paths        what to delete; matching files and folders are removed
-#   kind         paths (default) | package-cache | journal
+#   kind         paths (default) | package-cache | journal | snap-revisions
 #   needs_root   true if only the administrator can delete these
 #   exclude_known  skip folders that another cleaner already handles
 #
@@ -303,6 +303,16 @@ description = "Installers of past updates kept by the package manager."
 icon = "package-x-generic-symbolic"
 default = true
 kind = "package-cache"
+needs_root = true
+
+[[cleaner]]
+id = "snap-revisions"
+name = "Old Snap versions"
+category = "system"
+description = "Older versions of snap apps kept after updates."
+icon = "package-x-generic-symbolic"
+default = true
+kind = "snap-revisions"
 needs_root = true
 
 [[cleaner]]

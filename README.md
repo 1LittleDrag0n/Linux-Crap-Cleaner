@@ -14,13 +14,38 @@ with Rust, GTK4 and libadwaita.
 |---|---|---|
 | Dashboard | Disk usage and a quick look at caches, package cache and logs | ✅ M1 |
 | Storage Analyzer | Biggest folders and files, clickable ring chart, move to Trash | ✅ M1 |
-| Junk Cleaner | Browser, app and developer caches, AUR leftovers, Trash; previews package cache and logs | ✅ M2 |
-| System Leftovers | Orphan packages, unused Flatpak runtimes, data of removed apps, broken launchers and links, `.pacnew` files | ✅ M3 |
-| Installed Software | Every pacman package, Flatpak and AppImage with sizes; search, sort, uninstall Flatpaks and AppImages | ✅ M3 |
+| Junk Cleaner | Browser, app and developer caches, AUR build files, Trash, old package versions, old Snap versions, logs, crash dumps | ✅ M2 |
+| System Leftovers | Orphan packages, unused Flatpak runtimes, data of removed apps, broken launchers and links, config files to review (`.pacnew`, `.rpmnew`, `.dpkg-dist`, ...) | ✅ M3 |
+| Installed Software | Every system package, Flatpak, Snap and AppImage with sizes; search, sort, uninstall with a preview | ✅ M3 |
 | Duplicates & Big Files | Identical files by content, very large files, empty folders; keep-one selection rules | ✅ M4 |
 | App Usage | Apps not used for months (largest first), estimated or tracked | ✅ M5 |
-| Administrator helper | Package cache, logs, crash dumps, orphan packages and uninstalling, via pkexec | ✅ M6 (part 1) |
-| Packaging | AUR package | M6 (part 2) |
+| Administrator helper | Package cache, logs, crash dumps, orphan packages, Snap versions and uninstalling, via pkexec | ✅ M6 |
+| Packaging | AppImage, built in an Ubuntu 24.04 container | ✅ M6 |
+
+## Supported distributions
+
+| Family | Package manager | Examples |
+|---|---|---|
+| Arch | pacman | Arch, CachyOS, EndeavourOS, Manjaro |
+| Debian | APT (+ Snap) | Debian 13, Ubuntu 24.04+, Linux Mint 22+, Pop!_OS, elementary OS |
+| Fedora | DNF (DNF 4 and 5) | Fedora 40+, RHEL/Alma/Rocky 10 |
+| openSUSE | Zypper | Tumbleweed, Slowroll, Leap 16 |
+
+Flatpak, Snap and AppImages work on all of them. Needs GTK 4.14+ and
+libadwaita 1.5+. The pacman support is tested on a real system; APT, DNF,
+Zypper and Snap are tested against sample output of their tools.
+
+What differs between package managers:
+
+- **Removal preview:** pacman and APT show exactly which packages an
+  uninstall removes. DNF and Zypper can't do a dry run without root, so the
+  dialog lists the package itself and says unneeded dependencies go too.
+- **Package cache:** pacman keeps the newest versions of each package (set in
+  Settings). APT, DNF and Zypper remove all downloaded package files.
+- **Protected packages:** besides a built-in list and the running kernel,
+  APT's essential/required packages and DNF's protected packages are never
+  removed. On APT, the helper also does a dry run first and refuses if a
+  removal would take a protected package with it.
 
 ## Safety
 
@@ -55,7 +80,13 @@ usual password prompt (a polkit authentication agent must be running).
 The helper only accepts a short list of named tasks (see
 [`privileged.rs`](crates/lcc-core/src/privileged.rs)), never a file path or a
 command. It re-checks everything as root, refuses to remove critical packages
-or the running kernel, and removes packages only through pacman.
+or the running kernel, and removes packages only through the system package
+manager (pacman, APT, DNF, Zypper) or `snap`.
+
+Inside the AppImage, pkexec runs the AppImage file itself with
+`--lcc-helper`, and the app hands over to the bundled helper (the AppImage's
+own files are mounted where only you can read them, so root can't start the
+helper there directly). The password prompt then shows the AppImage's path.
 
 During development the helper next to the app binary (`target/debug/lcc-helper`)
 is used. For a nicer password prompt that remembers your password for a few
@@ -68,6 +99,38 @@ sudo install -Dm755 target/release/lcc-helper /usr/lib/linux-crap-cleaner/lcc-he
 ```bash
 sudo install -Dm644 data/io.github.LinuxCrapCleaner.policy /usr/share/polkit-1/actions/io.github.LinuxCrapCleaner.policy
 ```
+
+## AppImage
+
+GitHub builds it for you: the [Build workflow](.github/workflows/build.yml)
+tests every push and pull request on Ubuntu 24.04 and builds the AppImage
+(download it from the run's **Artifacts**). Pushing a version tag publishes a
+GitHub Release with the AppImage attached:
+
+```bash
+git tag v0.1.0
+```
+
+```bash
+git push origin v0.1.0
+```
+
+To build it on your own computer instead:
+
+```bash
+packaging/appimage/build-in-container.sh
+```
+
+This builds `dist/Linux_Crap_Cleaner-<version>-x86_64.AppImage` inside an
+Ubuntu 24.04 container (podman or docker), so the AppImage also runs on
+older distributions: an AppImage only runs on systems at least as new as the
+one it was built on. GTK 4 and libadwaita are bundled with
+[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) and its GTK plugin,
+which the script downloads into `target/appimage-tools` on first use.
+
+`packaging/appimage/build-appimage.sh` does the same without a container (the
+result then needs a system as new as yours), and `--appdir` only assembles
+the AppDir without downloading anything.
 
 ## Building
 
@@ -90,6 +153,12 @@ Fedora:
 
 ```bash
 sudo dnf install cargo gtk4-devel libadwaita-devel
+```
+
+openSUSE:
+
+```bash
+sudo zypper install cargo gtk4-devel libadwaita-devel
 ```
 
 Then build and run:
@@ -152,7 +221,11 @@ crates/
     cleaners/   Junk Cleaner rules (TOML)
   lcc-gui/      The GTK4 + libadwaita app (Relm4)
   lcc-helper/   Administrator helper run through pkexec
-data/           Desktop entry and polkit policy
+data/           Desktop entry, icon, AppStream metadata, polkit policy
+packaging/
+  appimage/     AppImage build scripts and container
+.github/
+  workflows/    Tests, AppImage build and releases on GitHub
 ```
 
 Settings are stored in `~/.config/linux-crap-cleaner/settings.toml`.
