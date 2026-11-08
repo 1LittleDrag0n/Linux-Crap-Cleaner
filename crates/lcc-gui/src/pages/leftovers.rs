@@ -372,12 +372,15 @@ impl LeftoversPage {
         if let Some(m) = l.modified {
             subtitle.push_str(&format!(" · changed {}", ago(m, now)));
         }
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title(&l.name)
-            .subtitle(&subtitle)
-            .subtitle_lines(2)
-            .build();
+        let row = {
+            let row = adw::ActionRow::builder()
+                .use_markup(false)
+                .subtitle_lines(2)
+                .build();
+            row.set_title(&l.name);
+            row.set_subtitle(&subtitle);
+            row
+        };
 
         if removable(l) {
             let check = gtk::CheckButton::builder()

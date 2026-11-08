@@ -264,11 +264,12 @@ fn app_row(a: &AppUsage, now: i64, sender: &ComponentSender<UsagePage>) -> adw::
     }
     subtitle.push_str(&format!(" · {}", p.source.name()));
 
-    let row = adw::ActionRow::builder()
-        .use_markup(false)
-        .title(&p.display_name)
-        .subtitle(subtitle)
-        .build();
+    let row = {
+        let row = adw::ActionRow::builder().use_markup(false).build();
+        row.set_title(&p.display_name);
+        row.set_subtitle(&subtitle);
+        row
+    };
     let icon = gtk::Image::builder().pixel_size(32).build();
     match p.icon.as_deref() {
         Some(i) if i.starts_with('/') => icon.set_from_file(Some(i)),

@@ -4,10 +4,12 @@
 //! it can be unit-tested and reused by the GUI, the privileged helper and a
 //! future CLI.
 
+pub mod contents;
 pub mod desktop;
 pub mod disks;
 pub mod duplicates;
 pub mod format;
+pub mod host;
 pub mod junk;
 pub mod leftovers;
 pub mod native;

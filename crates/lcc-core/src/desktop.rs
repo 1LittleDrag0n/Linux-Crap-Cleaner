@@ -63,12 +63,13 @@ pub fn parse_desktop_entry(path: &Path, text: &str) -> DesktopEntry {
 /// ones with the same id).
 pub fn application_dirs() -> Vec<PathBuf> {
     let home = dirs::home_dir();
-    let data_home = std::env::var_os("XDG_DATA_HOME")
+    let data_home = crate::host::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-    let data_dirs = std::env::var("XDG_DATA_DIRS")
-        .ok()
+    // The system's folders, not the AppImage's own.
+    let data_dirs = crate::host::var_os("XDG_DATA_DIRS")
+        .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
 

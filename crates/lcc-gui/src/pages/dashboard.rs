@@ -101,13 +101,16 @@ impl Component for Dashboard {
             .build();
         let mut quick_rows = Vec::new();
         for item in &quick {
-            let row = adw::ActionRow::builder()
-                .use_markup(false)
-                .title(item.title)
-                .subtitle(format!("{} · {}", item.description, item.path.display()))
-                .subtitle_lines(2)
-                .activatable(true)
-                .build();
+            let row = {
+                let row = adw::ActionRow::builder()
+                    .use_markup(false)
+                    .subtitle_lines(2)
+                    .activatable(true)
+                    .build();
+                row.set_title(item.title);
+                row.set_subtitle(&format!("{} · {}", item.description, item.path.display()));
+                row
+            };
             let spinner = gtk::Spinner::builder().spinning(true).build();
             let size = gtk::Label::builder().css_classes(["numeric"]).build();
             row.add_suffix(&spinner);
@@ -289,18 +292,23 @@ fn dirs_cache() -> Option<PathBuf> {
 
 fn disk_row(disk: &Disk, sender: &ComponentSender<Dashboard>) -> adw::ActionRow {
     let fraction = disk.used_fraction();
-    let row = adw::ActionRow::builder()
-        .use_markup(false)
-        .title(&disk.label)
-        .subtitle(format!(
-            "{} free of {} · {} · {}",
-            human_size(disk.available),
-            human_size(disk.total),
-            disk.mount_point.display(),
-            disk.fs_type
-        ))
-        .activatable(true)
-        .build();
+    let row = {
+        let row = adw::ActionRow::builder()
+            .use_markup(false)
+            .activatable(true)
+            .build();
+        row.set_title(&disk.label);
+        row.set_subtitle(
+            &(format!(
+                "{} free of {} · {} · {}",
+                human_size(disk.available),
+                human_size(disk.total),
+                disk.mount_point.display(),
+                disk.fs_type
+            )),
+        );
+        row
+    };
     row.add_prefix(&gtk::Image::from_icon_name("drive-harddisk-symbolic"));
 
     let bar = gtk::LevelBar::builder()
@@ -396,12 +404,15 @@ fn safety_group() -> adw::PreferencesGroup {
 }
 
 fn info_row(title: &str, value: &str) -> adw::ActionRow {
-    let row = adw::ActionRow::builder()
-        .use_markup(false)
-        .title(title)
-        .subtitle(value)
-        .subtitle_selectable(true)
-        .build();
+    let row = {
+        let row = adw::ActionRow::builder()
+            .use_markup(false)
+            .subtitle_selectable(true)
+            .build();
+        row.set_title(title);
+        row.set_subtitle(value);
+        row
+    };
     row.add_css_class("property");
     row
 }

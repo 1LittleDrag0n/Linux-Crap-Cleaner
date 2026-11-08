@@ -7,16 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use lcc_core::disks::{Disk, list_disks};
+use lcc_core::disks::{Disk, list_disks, mounts_inside, read_mounts};
 use lcc_core::format::{count, duration, human_size, percent};
 use lcc_core::remove::remove;
-use lcc_core::safety::PathGuard;
+use lcc_core::safety::{PathGuard, on_other_drive};
 use lcc_core::scan::{EntryKind, ScanOptions, ScanProgress, ScanResult, scan};
 use lcc_core::settings::{DeleteMode, Settings};
 use relm4::adw::prelude::*;
 use relm4::gtk::{gio, glib};
 use relm4::{Component, ComponentParts, ComponentSender, adw, gtk};
 
+use crate::widgets::review_dialog::{self, Review};
 use crate::widgets::ring_chart::{RingChart, assign_slots, swatch};
 
 /// Rows shown per folder; the rest are summarised in one row.
@@ -731,12 +732,15 @@ impl StoragePage {
             }
             for file in &result.largest_files {
                 let parent = file.path.parent().unwrap_or(Path::new("/"));
-                let row = adw::ActionRow::builder()
-                    .use_markup(false)
-                    .title(file_name(&file.path))
-                    .subtitle(parent.display().to_string())
-                    .subtitle_lines(1)
-                    .build();
+                let row = {
+                    let row = adw::ActionRow::builder()
+                        .use_markup(false)
+                        .subtitle_lines(1)
+                        .build();
+                    row.set_title(&file_name(&file.path));
+                    row.set_subtitle(&parent.display().to_string());
+                    row
+                };
                 row.add_prefix(&gtk::Image::from_icon_name("text-x-generic-symbolic"));
                 row.add_suffix(
                     &gtk::Label::builder()
@@ -768,6 +772,57 @@ impl StoragePage {
                 protected.reason
             )));
             return;
+        }
+
+        if is_folder {
+            let mounts = read_mounts();
+            if let Some(inner) = mounts_inside(&mounts, &path).first() {
+                let _ = sender.output(StorageOutput::Toast(format!(
+                    "“{}” can't be deleted: another drive is mounted inside it, at {}",
+                    file_name(&path),
+                    inner.display()
+                )));
+                return;
+            }
+            let home = dirs_home().unwrap_or_default();
+            if on_other_drive(&path, &home, &mounts) {
+                let node = match &self.state {
+                    State::Done(result) => {
+                        path.strip_prefix(&result.root_path).ok().and_then(|rel| {
+                            let names: Vec<OsString> =
+                                rel.iter().map(|n| n.to_os_string()).collect();
+                            result.node_at(&names).cloned()
+                        })
+                    }
+                    _ => None,
+                };
+                let review = Review {
+                    path: path.clone(),
+                    size,
+                    files,
+                    node,
+                    mode: self.settings.delete_mode,
+                };
+                let open_sender = sender.clone();
+                let delete_sender = sender.clone();
+                review_dialog::present(
+                    review,
+                    parent,
+                    move |path| {
+                        open_sender.input(StorageMsg::ShowInFiles {
+                            path,
+                            is_folder: true,
+                        })
+                    },
+                    move || {
+                        delete_sender.input(StorageMsg::Remove {
+                            path: path.clone(),
+                            size,
+                        })
+                    },
+                );
+                return;
+            }
         }
 
         let name = file_name(&path);
@@ -834,12 +889,15 @@ fn target_row(
     path: PathBuf,
     sender: &ComponentSender<StoragePage>,
 ) -> adw::ActionRow {
-    let row = adw::ActionRow::builder()
-        .use_markup(false)
-        .title(title)
-        .subtitle(subtitle)
-        .activatable(true)
-        .build();
+    let row = {
+        let row = adw::ActionRow::builder()
+            .use_markup(false)
+            .activatable(true)
+            .build();
+        row.set_title(title);
+        row.set_subtitle(subtitle);
+        row
+    };
     row.add_prefix(&gtk::Image::from_icon_name(icon));
     row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     let sender = sender.clone();

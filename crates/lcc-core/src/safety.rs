@@ -11,6 +11,9 @@
 //!   Downloads, ...), though files inside them may be removed
 //! * browser files holding passwords, cookies or history
 //! * anything inside a folder the user excluded in Settings
+//! * the top folder of a mounted drive or subvolume, and the folders drives
+//!   are mounted in (`/media`, `/mnt`, `/run/media/<user>`); files on the
+//!   drive may be removed
 //!
 //! Paths are checked both as written and with their parent folder's symlinks
 //! resolved, so `~/link-to-usr/bin` is refused too.
@@ -65,6 +68,10 @@ const SYSTEM_TREES: &[(&str, &str)] = &[
     ("/usr", "installed software"),
     ("/var/lib", "package databases and service data"),
 ];
+
+/// Where udisks mounts removable drives: `/run/media/<user>/<drive>`.
+const REMOVABLE_MEDIA: &str = "/run/media";
+const DRIVES_FOLDER: &str = "the folder drives are mounted in";
 
 /// Private data inside the home folder.
 const PRIVATE_HOME_TREES: &[(&str, &str)] = &[
@@ -151,6 +158,8 @@ impl PathGuard {
             ),
             (PathBuf::from("/var"), "system data".to_owned()),
             (PathBuf::from("/tmp"), "shared temporary folder".to_owned()),
+            (PathBuf::from("/media"), DRIVES_FOLDER.to_owned()),
+            (PathBuf::from("/mnt"), DRIVES_FOLDER.to_owned()),
             (home.to_path_buf(), "your home folder".to_owned()),
         ];
         exact.extend(
@@ -189,6 +198,10 @@ impl PathGuard {
         let lexical = normalize(path);
         self.check_normalized(&lexical).map_err(|r| refuse(&r))?;
 
+        if is_mount_point(&lexical) {
+            return Err(refuse("the top folder of a mounted drive"));
+        }
+
         // Resolve symlinks in the parent so a link can't smuggle a protected
         // location past the lexical check.
         if let (Some(parent), Some(name)) = (lexical.parent(), lexical.file_name())
@@ -207,7 +220,18 @@ impl PathGuard {
         if let Some((_, why)) = self.exact.iter().find(|(p, _)| p == path) {
             return Err(why.clone());
         }
-        if let Some((_, why)) = self.trees.iter().find(|(p, _)| path.starts_with(p)) {
+        // Removable drives: `/run/media/<user>/<drive>/...` is the user's
+        // data, though the rest of `/run` is runtime state.
+        let on_removable_drive = path.starts_with(REMOVABLE_MEDIA) && {
+            let depth = path.components().count();
+            if depth <= 5 {
+                return Err(DRIVES_FOLDER.to_owned());
+            }
+            true
+        };
+        if let Some((tree, why)) = self.trees.iter().find(|(p, _)| path.starts_with(p))
+            && !(on_removable_drive && tree == Path::new("/run"))
+        {
             return Err(why.clone());
         }
         if let Some(name) = path.file_name().and_then(|n| n.to_str())
@@ -245,6 +269,43 @@ impl PathGuard {
     /// File names protected wherever they appear.
     pub fn sensitive_file_names() -> &'static [&'static str] {
         SENSITIVE_FILE_NAMES
+    }
+}
+
+/// A path on a drive other than the ones holding the system and the home
+/// folder: anything under `/mnt`, `/media` or `/run/media`, or on a real disk
+/// that isn't the system's or home's. Subvolumes and partitions of the
+/// system disk (`/var/cache` on its own btrfs subvolume) don't count, nor do
+/// memory filesystems like `/tmp`.
+pub fn on_other_drive(path: &Path, home: &Path, mounts: &[crate::disks::Mount]) -> bool {
+    use crate::disks::{is_disk_fs, mount_for};
+    if ["/mnt", "/media", REMOVABLE_MEDIA]
+        .iter()
+        .any(|p| path.starts_with(p))
+    {
+        return true;
+    }
+    let Some(mount) = mount_for(mounts, path) else {
+        return false;
+    };
+    if !is_disk_fs(&mount.fs_type) {
+        return false;
+    }
+    let source_of = |p: &Path| mount_for(mounts, p).map(|m| m.source.as_str());
+    Some(mount.source.as_str()) != source_of(Path::new("/"))
+        && Some(mount.source.as_str()) != source_of(home)
+}
+
+/// A folder on a different filesystem than its parent: a mounted drive, a
+/// partition or a btrfs subvolume. Deleting it would empty the whole drive.
+fn is_mount_point(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    match (std::fs::symlink_metadata(path), std::fs::metadata(parent)) {
+        (Ok(meta), Ok(parent_meta)) => meta.is_dir() && meta.dev() != parent_meta.dev(),
+        _ => false,
     }
 }
 
@@ -341,6 +402,49 @@ mod tests {
         // `/usrlocal` is not inside `/usr`.
         assert!(allowed("/usrlocal/junk"));
         assert!(allowed("/home/test/.sshfoo"));
+    }
+
+    #[test]
+    fn allows_files_on_removable_drives() {
+        assert!(allowed("/run/media/test/HDD1/fiverr/p2"));
+        assert!(allowed("/run/media/test/HDD1/old.iso"));
+        assert!(!allowed("/run/media/test/HDD1"));
+        assert!(!allowed("/run/media/test"));
+        assert!(!allowed("/run/media"));
+        assert!(!allowed("/run/user/1000/bus"));
+        assert!(!allowed("/media"));
+        assert!(!allowed("/mnt"));
+        assert!(allowed("/mnt/backup/old"));
+        // Exclusions and browser secrets still apply on drives.
+        assert!(!allowed("/run/media/test/HDD1/firefox/logins.json"));
+    }
+
+    #[test]
+    fn knows_other_drives() {
+        let mounts = crate::disks::parse_mountinfo(
+            "1 0 0:1 / / rw - btrfs /dev/nvme0n1p2 rw\n\
+             2 1 0:2 / /home rw - btrfs /dev/nvme0n1p2 rw\n\
+             3 1 0:3 / /var/cache rw - btrfs /dev/nvme0n1p2 rw\n\
+             4 1 0:4 / /tmp rw - tmpfs tmpfs rw\n\
+             5 1 0:5 / /data rw - ext4 /dev/sdb1 rw\n",
+        );
+        let home = Path::new("/home/test");
+        let other = |p: &str| on_other_drive(Path::new(p), home, &mounts);
+        assert!(other("/data/old"));
+        assert!(other("/mnt/linuxp1/stuff"));
+        assert!(other("/run/media/test/HDD1/fiverr"));
+        assert!(!other("/home/test/Downloads/x"));
+        assert!(!other("/var/cache/pacman"));
+        assert!(!other("/tmp/x"));
+    }
+
+    #[test]
+    fn refuses_mount_points() {
+        // `/proc` is always a different filesystem from `/`.
+        let g = PathGuard::new(Path::new("/home/test"), &[]);
+        assert!(is_mount_point(Path::new("/proc")));
+        assert!(!is_mount_point(Path::new("/proc/self/fd/0")));
+        assert!(g.check(Path::new("/proc")).is_err());
     }
 
     #[test]

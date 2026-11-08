@@ -11,7 +11,6 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rayon::prelude::*;
 
@@ -166,7 +165,7 @@ fn program_exists(name: &str) -> bool {
 /// Runs a read-only command in the C locale and returns its standard output,
 /// or `None` if it couldn't run or failed.
 fn read_command(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program)
+    let out = crate::host::command(program)
         .args(args)
         .env("LC_ALL", "C")
         .output()
@@ -326,7 +325,7 @@ impl Backend {
             Backend::Pacman => {
                 let mut args = vec!["-Rnsp", "--print-format", "%n %s", "--"];
                 args.extend(names.iter().map(String::as_str));
-                let out = Command::new("pacman")
+                let out = crate::host::command("pacman")
                     .args(&args)
                     .env("LC_ALL", "C")
                     .output()
@@ -349,7 +348,7 @@ impl Backend {
             Backend::Apt => {
                 let mut args = vec!["-s", "remove", "--autoremove", "--"];
                 args.extend(names.iter().map(String::as_str));
-                let out = Command::new("apt-get")
+                let out = crate::host::command("apt-get")
                     .args(&args)
                     .env("LC_ALL", "C")
                     .output()
@@ -748,7 +747,11 @@ fn rpm_owners(paths: &[PathBuf]) -> HashMap<PathBuf, String> {
             "--".into(),
         ];
         args.extend(chunk.iter().map(|p| p.display().to_string()));
-        let Ok(out) = Command::new("rpm").args(&args).env("LC_ALL", "C").output() else {
+        let Ok(out) = crate::host::command("rpm")
+            .args(&args)
+            .env("LC_ALL", "C")
+            .output()
+        else {
             continue;
         };
         let text = String::from_utf8_lossy(&out.stdout);

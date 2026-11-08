@@ -58,7 +58,7 @@ fetch "linuxdeploy-plugin-appimage-$ARCH.AppImage" \
 fetch "linuxdeploy-plugin-gtk.sh" \
     "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
 
-echo "==> Packaging"
+echo "==> Bundling GTK"
 mkdir -p "$DIST"
 export PATH="$TOOLS:$PATH"
 # Run the tools without FUSE (needed in containers).
@@ -74,7 +74,33 @@ export LDAI_OUTPUT="$DIST/Linux_Crap_Cleaner-$VERSION-$ARCH.AppImage"
     --executable "$APPDIR/usr/bin/lcc-helper" \
     --desktop-file "$APPDIR/usr/share/applications/$APP_ID.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" \
-    --plugin gtk \
-    --output appimage
+    --plugin gtk
+
+# The GTK plugin's start-up hook forces a GTK theme and X11; ours doesn't.
+# AppRun sources the hook by this file name.
+echo "==> Installing the start-up hook"
+install -m644 "$ROOT/packaging/appimage/apprun-hook.sh" \
+    "$APPDIR/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+
+# GSettings through dconf, so GTK uses the system's font, icon theme and
+# cursor like an installed app does.
+echo "==> Bundling the dconf GSettings backend and desktop schemas"
+GIO_MODULES="$(pkg-config --variable=giomoduledir gio-2.0)"
+if [[ ! -f "$GIO_MODULES/libdconfsettings.so" ]]; then
+    echo "error: $GIO_MODULES/libdconfsettings.so is missing (install dconf-gsettings-backend)" >&2
+    exit 1
+fi
+install -Dm755 "$GIO_MODULES/libdconfsettings.so" "$APPDIR/usr/lib/gio/modules/libdconfsettings.so"
+SCHEMAS=/usr/share/glib-2.0/schemas
+if ! compgen -G "$SCHEMAS/org.gnome.desktop.interface.gschema.xml" >/dev/null; then
+    echo "error: GNOME desktop schemas are missing (install gsettings-desktop-schemas)" >&2
+    exit 1
+fi
+install -m644 "$SCHEMAS"/org.gnome.desktop.*.gschema.xml "$SCHEMAS"/org.gnome.desktop.enums.xml \
+    "$APPDIR/usr/share/glib-2.0/schemas/"
+glib-compile-schemas "$APPDIR/usr/share/glib-2.0/schemas"
+
+echo "==> Packaging"
+"$TOOLS/linuxdeploy-plugin-appimage-$ARCH.AppImage" --appdir "$APPDIR"
 
 echo "==> Built $LDAI_OUTPUT"

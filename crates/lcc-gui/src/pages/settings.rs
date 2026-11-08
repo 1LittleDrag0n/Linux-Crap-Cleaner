@@ -299,11 +299,14 @@ fn set_switch(row: &adw::SwitchRow, active: bool) {
 }
 
 fn excluded_row(path: &std::path::Path, sender: &ComponentSender<SettingsPage>) -> adw::ActionRow {
-    let row = adw::ActionRow::builder()
-        .use_markup(false)
-        .title(path.display().to_string())
-        .title_selectable(true)
-        .build();
+    let row = {
+        let row = adw::ActionRow::builder()
+            .use_markup(false)
+            .title_selectable(true)
+            .build();
+        row.set_title(&path.display().to_string());
+        row
+    };
     row.add_prefix(&gtk::Image::from_icon_name("folder-symbolic"));
 
     let remove = gtk::Button::builder()
@@ -382,11 +385,12 @@ fn protected_group() -> adw::PreferencesGroup {
 }
 
 fn rule_row(path: &std::path::Path, reason: &str) -> adw::ActionRow {
-    adw::ActionRow::builder()
-        .use_markup(false)
-        .title(path.display().to_string())
-        .subtitle(reason)
-        .build()
+    {
+        let row = adw::ActionRow::builder().use_markup(false).build();
+        row.set_title(&path.display().to_string());
+        row.set_subtitle(reason);
+        row
+    }
 }
 
 fn dirs_home() -> PathBuf {

@@ -10,7 +10,6 @@
 //! password prompt covers a whole cleanup.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// One task for the helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,7 +255,7 @@ pub fn run_privileged(ops: &[Operation]) -> Result<Vec<OpReport>, String> {
     }
     let (helper, prefix) =
         helper_command().ok_or("The administrator helper (lcc-helper) isn't installed.")?;
-    let output = Command::new("pkexec")
+    let output = crate::host::command("pkexec")
         .arg(&helper)
         .args(prefix)
         .args(ops_to_args(ops))

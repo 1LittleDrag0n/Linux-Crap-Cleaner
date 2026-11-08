@@ -288,9 +288,10 @@ impl SimpleComponent for App {
                 self.storage.emit(StorageMsg::SettingsChanged(settings));
             }
             AppMsg::Toast(text) => {
-                // Toasts are markup by default; file names may contain `&` or `<`.
-                let toast = adw::Toast::new(&text);
-                toast.set_use_markup(false);
+                // Toasts are markup, and file names may contain `&` or `<`.
+                // Escaping works on every libadwaita; turning markup off
+                // still parses the title once on older ones (the AppImage's).
+                let toast = adw::Toast::new(&gtk::glib::markup_escape_text(&text));
                 self.toasts.add_toast(toast);
             }
             AppMsg::JunkCleaned => self.dashboard.emit(DashboardMsg::Refresh),

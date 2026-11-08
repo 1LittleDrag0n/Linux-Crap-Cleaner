@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::desktop::{self, DesktopEntry};
 
@@ -88,7 +87,7 @@ pub fn parse_snap_list(text: &str) -> Vec<SnapEntry> {
 
 /// Every installed snap revision. Empty if snapd isn't installed.
 pub fn list_all() -> Vec<SnapEntry> {
-    let Ok(out) = Command::new("snap")
+    let Ok(out) = crate::host::command("snap")
         .args(["list", "--all"])
         .env("LC_ALL", "C")
         .output()

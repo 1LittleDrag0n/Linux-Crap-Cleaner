@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
 use lcc_core::junk::{glob, measure, old_package_versions};
 use lcc_core::native::{Backend, explain_error};
@@ -289,7 +289,7 @@ fn regular_files_in(dir: &Path) -> Vec<PathBuf> {
 
 /// Runs a system tool; on failure returns its last error line.
 fn command(program: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(program)
+    let output = lcc_core::host::command(program)
         .args(args)
         .env("LC_ALL", "C")
         .env("DEBIAN_FRONTEND", "noninteractive")

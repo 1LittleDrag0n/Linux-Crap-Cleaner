@@ -6,7 +6,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rayon::prelude::*;
 
@@ -230,7 +229,7 @@ pub fn parse_flatpak_list(text: &str) -> Vec<FlatpakRef> {
 /// isn't installed.
 pub fn flatpak_list(runtimes: bool) -> Vec<FlatpakRef> {
     let kind = if runtimes { "--runtime" } else { "--app" };
-    let output = Command::new("flatpak")
+    let output = crate::host::command("flatpak")
         .args(["list", kind, &format!("--columns={FLATPAK_COLUMNS}")])
         .env("LC_ALL", "C")
         .output();
@@ -576,7 +575,7 @@ web-browser=1.0
         if !db.is_dir() {
             return;
         }
-        let Ok(out) = Command::new("pacman").arg("-Qdtq").output() else {
+        let Ok(out) = crate::host::command("pacman").arg("-Qdtq").output() else {
             return;
         };
         let mut expected: Vec<String> = String::from_utf8_lossy(&out.stdout)

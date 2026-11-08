@@ -578,10 +578,11 @@ impl DuplicatesPage {
             w.folders_group.remove(&row);
         }
         for folder in &self.folders {
-            let row = adw::ActionRow::builder()
-                .use_markup(false)
-                .title(folder.display().to_string())
-                .build();
+            let row = {
+                let row = adw::ActionRow::builder().use_markup(false).build();
+                row.set_title(&folder.display().to_string());
+                row
+            };
             row.add_prefix(&gtk::Image::from_icon_name("folder-symbolic"));
             let remove = gtk::Button::builder()
                 .icon_name("list-remove-symbolic")
@@ -710,12 +711,15 @@ impl DuplicatesPage {
                 if all_selected {
                     subtitle.push_str(" · every copy is selected");
                 }
-                let row = adw::ExpanderRow::builder()
-                    .use_markup(false)
-                    .title(group_name(g))
-                    .subtitle(subtitle)
-                    .expanded(i < EXPANDED_GROUPS)
-                    .build();
+                let row = {
+                    let row = adw::ExpanderRow::builder()
+                        .use_markup(false)
+                        .expanded(i < EXPANDED_GROUPS)
+                        .build();
+                    row.set_title(&group_name(g));
+                    row.set_subtitle(&subtitle);
+                    row
+                };
                 row.add_prefix(&gtk::Image::from_icon_name("edit-copy-symbolic"));
                 for f in &g.files {
                     let mut detail = format!("changed {}", ago(f.modified, now));
@@ -809,11 +813,12 @@ impl DuplicatesPage {
         size: Option<u64>,
         sender: &ComponentSender<Self>,
     ) -> adw::ActionRow {
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title(title)
-            .subtitle(subtitle)
-            .build();
+        let row = {
+            let row = adw::ActionRow::builder().use_markup(false).build();
+            row.set_title(title);
+            row.set_subtitle(subtitle);
+            row
+        };
         let check = gtk::CheckButton::builder()
             .valign(gtk::Align::Center)
             .active(self.selected.contains(path))

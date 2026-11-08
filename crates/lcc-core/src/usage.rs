@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -182,7 +181,7 @@ pub fn tracker_installed() -> bool {
 pub fn set_tracker_enabled(enabled: bool) -> Result<(), String> {
     let path = service_path().ok_or("no config folder")?;
     let systemctl = |args: &[&str]| -> Result<(), String> {
-        let out = Command::new("systemctl")
+        let out = crate::host::command("systemctl")
             .arg("--user")
             .args(args)
             .output()

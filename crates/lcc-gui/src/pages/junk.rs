@@ -456,10 +456,11 @@ impl JunkPage {
         home: Option<&Path>,
         sender: &ComponentSender<Self>,
     ) -> adw::ExpanderRow {
-        let row = adw::ExpanderRow::builder()
-            .use_markup(false)
-            .title(&f.cleaner.name)
-            .build();
+        let row = {
+            let row = adw::ExpanderRow::builder().use_markup(false).build();
+            row.set_title(&f.cleaner.name);
+            row
+        };
 
         let check = gtk::CheckButton::builder()
             .valign(gtk::Align::Center)
@@ -513,15 +514,18 @@ impl JunkPage {
 
         // Preview: exactly what would be removed.
         for item in f.items.iter().take(MAX_ITEMS) {
-            let item_row = adw::ActionRow::builder()
-                .use_markup(false)
-                .title(short_path(&item.path, home))
-                .subtitle(if item.files == 1 {
-                    "1 file".to_owned()
-                } else {
-                    format!("{} files", count(item.files))
-                })
-                .build();
+            let item_row = {
+                let row = adw::ActionRow::builder().use_markup(false).build();
+                row.set_title(&short_path(&item.path, home));
+                row.set_subtitle(
+                    &(if item.files == 1 {
+                        "1 file".to_owned()
+                    } else {
+                        format!("{} files", count(item.files))
+                    }),
+                );
+                row
+            };
             item_row.add_suffix(
                 &gtk::Label::builder()
                     .label(human_size(item.size))
@@ -660,32 +664,35 @@ fn show_report(w: &JunkWidgets, report: &CleanReport) {
     )));
     w.done_details.remove_all();
     for name in &report.skipped_running {
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title(format!("Skipped {name}"))
-            .subtitle("It was opened while cleaning. Close it and clean again.")
-            .build();
+        let row = {
+            let row = adw::ActionRow::builder().use_markup(false).build();
+            row.set_title(&format!("Skipped {name}"));
+            row.set_subtitle("It was opened while cleaning. Close it and clean again.");
+            row
+        };
         row.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
         w.done_details.append(&row);
     }
     if !report.failures.is_empty() {
-        let failed = adw::ExpanderRow::builder()
-            .use_markup(false)
-            .title(format!(
-                "{} items couldn't be removed",
-                count(report.failures.len() as u64)
-            ))
-            .subtitle("Usually because they belong to another user or the administrator.")
-            .build();
+        let failed = {
+            let row = adw::ExpanderRow::builder().use_markup(false).build();
+            row.set_title(
+                &(format!(
+                    "{} items couldn't be removed",
+                    count(report.failures.len() as u64)
+                )),
+            );
+            row.set_subtitle("Usually because they belong to another user or the administrator.");
+            row
+        };
         failed.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
         for (path, reason) in report.failures.iter().take(MAX_ITEMS) {
-            failed.add_row(
-                &adw::ActionRow::builder()
-                    .use_markup(false)
-                    .title(path.display().to_string())
-                    .subtitle(reason)
-                    .build(),
-            );
+            failed.add_row(&{
+                let row = adw::ActionRow::builder().use_markup(false).build();
+                row.set_title(&path.display().to_string());
+                row.set_subtitle(reason);
+                row
+            });
         }
         w.done_details.append(&failed);
     }

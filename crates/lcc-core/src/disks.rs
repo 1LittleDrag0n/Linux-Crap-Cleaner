@@ -142,6 +142,19 @@ pub fn mount_for<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
         .max_by_key(|m| m.mount_point.components().count())
 }
 
+/// Mount points strictly inside `path` (not `path` itself), such as another
+/// drive mounted in a sub-folder. Deleting `path` would reach into them.
+pub fn mounts_inside(mounts: &[Mount], path: &Path) -> Vec<PathBuf> {
+    let mut inside: Vec<PathBuf> = mounts
+        .iter()
+        .filter(|m| m.mount_point != path && m.mount_point.starts_with(path))
+        .map(|m| m.mount_point.clone())
+        .collect();
+    inside.sort();
+    inside.dedup();
+    inside
+}
+
 /// Lists real disks with their usage. A disk mounted in several places (such
 /// as btrfs subvolumes for `/` and `/home`) is listed once, under its
 /// shortest mount point.
@@ -263,6 +276,11 @@ mod tests {
         assert_eq!(mounts[0].fs_type, "btrfs");
         assert_eq!(mounts[0].source, "/dev/nvme0n1p2");
         assert_eq!(mounts[6].mount_point, Path::new("/run/media/me/My Drive"));
+        assert_eq!(
+            mounts_inside(&mounts, Path::new("/run/media/me")),
+            vec![PathBuf::from("/run/media/me/My Drive")]
+        );
+        assert!(mounts_inside(&mounts, Path::new("/run/media/me/My Drive")).is_empty());
     }
 
     #[test]

@@ -13,7 +13,6 @@
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::desktop::{self, DesktopEntry};
 use crate::junk::{Places, measure};
@@ -657,7 +656,7 @@ pub fn flatpak_uninstall(reference: &str, installation: &str) -> Result<(), Stri
     } else {
         "--system"
     };
-    let output = Command::new("flatpak")
+    let output = crate::host::command("flatpak")
         .args(["uninstall", "--noninteractive", "-y", scope, reference])
         .output()
         .map_err(|e| format!("couldn't run flatpak: {e}"))?;

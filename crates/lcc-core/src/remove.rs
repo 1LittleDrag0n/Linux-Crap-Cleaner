@@ -42,6 +42,18 @@ pub fn remove(path: &Path, mode: DeleteMode, guard: &PathGuard) -> Result<(), Re
         }
     })?;
 
+    // Never reach into another drive mounted somewhere inside a folder.
+    if meta.is_dir()
+        && let Some(inner) = crate::disks::mounts_inside(&crate::disks::read_mounts(), path)
+            .into_iter()
+            .next()
+    {
+        return Err(RemoveError::Protected(Protected {
+            path: path.to_path_buf(),
+            reason: format!("another drive is mounted inside it, at {}", inner.display()),
+        }));
+    }
+
     match mode {
         DeleteMode::MoveToTrash => trash::delete(path).map_err(|e| RemoveError::Trash {
             path: shown,
