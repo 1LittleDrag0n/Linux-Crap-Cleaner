@@ -10,8 +10,8 @@
 #
 #   packaging/appimage/build-in-container.sh
 #
-# Downloads linuxdeploy, its GTK plugin and its AppImage plugin into
-# target/appimage-tools on first use.
+# Downloads linuxdeploy, its GTK plugin, its AppImage plugin and the AppImage
+# runtime into target/appimage-tools on first use.
 
 set -euo pipefail
 
@@ -59,6 +59,10 @@ fetch "linuxdeploy-plugin-appimage-$ARCH.AppImage" \
     "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-$ARCH.AppImage"
 fetch "linuxdeploy-plugin-gtk.sh" \
     "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
+# The AppImage runtime. appimagetool would download it itself, but only once,
+# without retrying.
+fetch "runtime-$ARCH" \
+    "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$ARCH"
 
 echo "==> Bundling GTK"
 mkdir -p "$DIST"
@@ -69,6 +73,7 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export DEPLOY_GTK_VERSION=4
 export LINUXDEPLOY_OUTPUT_VERSION="$VERSION"
 export LDAI_OUTPUT="$DIST/Linux_Crap_Cleaner-$VERSION-$ARCH.AppImage"
+export LDAI_RUNTIME_FILE="$TOOLS/runtime-$ARCH"
 
 "$TOOLS/linuxdeploy-$ARCH.AppImage" \
     --appdir "$APPDIR" \
