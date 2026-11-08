@@ -57,6 +57,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.6" date="2026-11-08">
+      <description>
+        <p>Folders on other drives can be deleted after reviewing what's inside them. Works with APT, DNF, Zypper and Snap, and is available as an AppImage.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-08">
       <description>
         <p>First release.</p>

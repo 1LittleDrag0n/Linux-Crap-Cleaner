@@ -31,6 +31,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A release must contain the version it's named after: the AppImage's
+      # name, the About dialog and the metainfo all show the version from
+      # Cargo.toml, not the tag.
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          metainfo="$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' \
+            data/io.github.LinuxCrapCleaner.metainfo.xml | head -n1)"
+          echo "tag $tag, Cargo.toml $cargo, metainfo $metainfo"
+          if [[ "$tag" != "$cargo" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $cargo in Cargo.toml"
+            exit 1
+          fi
+          if [[ "$tag" != "$metainfo" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the newest release ($metainfo) in the metainfo"
+            exit 1
+          fi
+
       - name: Install GTK and libadwaita
         run: |
           sudo apt-get update
