@@ -45,6 +45,8 @@ pub enum AppMsg {
     Navigate(Page),
     /// Open a folder in the Storage Analyzer.
     Analyze(PathBuf),
+    /// Search a folder in Duplicates & Big Files.
+    FindDuplicates(PathBuf),
     ShowAbout,
     SettingsChanged(Settings),
     Toast(String),
@@ -133,6 +135,7 @@ impl SimpleComponent for App {
                 .launch(settings.clone())
                 .forward(sender.input_sender(), |out| match out {
                     StorageOutput::Toast(text) => AppMsg::Toast(text),
+                    StorageOutput::FindDuplicates(path) => AppMsg::FindDuplicates(path),
                 });
         let settings_page = SettingsPage::builder().launch(settings).forward(
             sender.input_sender(),
@@ -269,6 +272,10 @@ impl SimpleComponent for App {
             AppMsg::Analyze(path) => {
                 self.current = Page::StorageAnalyzer;
                 self.storage.emit(StorageMsg::Scan(path));
+            }
+            AppMsg::FindDuplicates(path) => {
+                self.current = Page::Duplicates;
+                self.duplicates.emit(DupMsg::SearchFolder(path));
             }
             AppMsg::ShowAbout => show_about(&self.window),
             AppMsg::SettingsChanged(settings) => {

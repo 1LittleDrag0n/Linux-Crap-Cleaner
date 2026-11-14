@@ -63,6 +63,9 @@ pub enum DupMsg {
     MinSize(u32),
     IncludeHidden(bool),
     Find,
+    /// Search only this folder, right away (from the Storage Analyzer).
+    /// A search that's running is replaced.
+    SearchFolder(PathBuf),
     Cancel,
     Tick,
     NewSearch,
@@ -366,6 +369,22 @@ impl Component for DuplicatesPage {
             }
             DupMsg::IncludeHidden(on) => self.include_hidden = on,
             DupMsg::Find => self.start(w, stack, &sender),
+            DupMsg::SearchFolder(path) => {
+                if stack.visible_child_name().as_deref() == Some("removing") {
+                    let _ = sender.output(DupOutput::Toast(
+                        "Wait until the selected files are removed, then try again".to_owned(),
+                    ));
+                    return;
+                }
+                if let State::Searching(p) = &self.state {
+                    p.cancel();
+                }
+                self.stop_tick();
+                self.folders = vec![path];
+                self.selected.clear();
+                self.show_folders(w, &sender);
+                self.start(w, stack, &sender);
+            }
             DupMsg::Cancel => {
                 if let State::Searching(p) = &self.state {
                     p.cancel();

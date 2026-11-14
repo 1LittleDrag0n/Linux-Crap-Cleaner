@@ -67,12 +67,16 @@ pub enum StorageMsg {
         path: PathBuf,
         is_folder: bool,
     },
+    /// Search for duplicates in this folder, or in the shown one.
+    FindDuplicates(Option<PathBuf>),
     SettingsChanged(Settings),
 }
 
 #[derive(Debug)]
 pub enum StorageOutput {
     Toast(String),
+    /// Open Duplicates & Big Files and search this folder.
+    FindDuplicates(PathBuf),
 }
 
 #[derive(Debug)]
@@ -174,6 +178,12 @@ impl Component for StoragePage {
             .vscrollbar_policy(gtk::PolicyType::Never)
             .hexpand(true)
             .build();
+        let find_duplicates = icon_button("edit-copy-symbolic", "Find duplicates in this folder");
+        {
+            let sender = sender.clone();
+            find_duplicates
+                .connect_clicked(move |_| sender.input(StorageMsg::FindDuplicates(None)));
+        }
         let rescan = icon_button("view-refresh-symbolic", "Scan again");
         {
             let sender = sender.clone();
@@ -191,6 +201,7 @@ impl Component for StoragePage {
             .margin_end(12)
             .build();
         top_row.append(&crumbs_scroller);
+        top_row.append(&find_duplicates);
         top_row.append(&rescan);
         top_row.append(&new_scan);
 
@@ -398,6 +409,14 @@ impl Component for StoragePage {
             }
             StorageMsg::ShowInFiles { path, is_folder } => {
                 show_in_files(&path, is_folder, stack, &sender)
+            }
+            StorageMsg::FindDuplicates(path) => {
+                let path = match (path, &self.state) {
+                    (Some(path), _) => path,
+                    (None, State::Done(r)) => r.path_at(&self.location),
+                    (None, _) => return,
+                };
+                let _ = sender.output(StorageOutput::FindDuplicates(path));
             }
             StorageMsg::SettingsChanged(settings) => self.settings = settings,
         }
@@ -684,6 +703,7 @@ impl StoragePage {
                             true,
                             sender,
                         ));
+                        row.add_suffix(&find_duplicates_button(&path, sender));
                         row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
                         row.set_activatable(true);
                         let sender = sender.clone();
@@ -970,6 +990,14 @@ fn remove_button(
             is_folder,
         })
     });
+    button
+}
+
+fn find_duplicates_button(path: &Path, sender: &ComponentSender<StoragePage>) -> gtk::Button {
+    let button = icon_button("edit-copy-symbolic", "Find duplicates in this folder");
+    let sender = sender.clone();
+    let path = path.to_path_buf();
+    button.connect_clicked(move |_| sender.input(StorageMsg::FindDuplicates(Some(path.clone()))));
     button
 }
 
